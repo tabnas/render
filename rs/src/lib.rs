@@ -7,5 +7,9 @@
 
 #![forbid(unsafe_code)]
 
+pub mod text;
+
+pub use text::{Join, ReplaceText, StringOut, TextOut, WriteOut, DEFAULT_BUDGET};
+
 /// This crate's version, as `Cargo.toml` declares it.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
