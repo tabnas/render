@@ -213,6 +213,9 @@ impl<O: TextOut> CsvRenderer<O> {
                 self.labels.len()
             ))));
         }
+        if let Err(f) = self.check(cells) {
+            return Err(self.fail(f));
+        }
         for (i, cell) in cells.iter().enumerate() {
             if i > 0 {
                 self.out.write_str(&self.delimiter)?;
@@ -222,6 +225,7 @@ impl<O: TextOut> CsvRenderer<O> {
                 Cell::Bool(true) => "true",
                 Cell::Bool(false) => "false",
                 Cell::Number { value, lexeme } => {
+                    // Validated by `check`; this pass only formats.
                     let emitted = self.emitted;
                     match number_text(*value, lexeme.as_deref(), &mut self.scratch) {
                         Ok(text) => text,
@@ -231,16 +235,8 @@ impl<O: TextOut> CsvRenderer<O> {
                 Cell::String(s) => s,
                 Cell::Missing => match &self.options.missing {
                     MissingText::Text(t) => t,
-                    MissingText::Error => {
-                        return Err(self.fail(Fail::new(
-                            Code::MissingValue,
-                            format!(
-                                "row {} has no value for column {:?}",
-                                self.rows + 1,
-                                self.labels[i]
-                            ),
-                        )))
-                    }
+                    // `check` rejected this row already.
+                    MissingText::Error => continue,
                 },
             };
             self.emitted = true;
@@ -254,6 +250,39 @@ impl<O: TextOut> CsvRenderer<O> {
         self.emitted = true;
         self.out.write_str(self.options.newline.as_str())?;
         self.rows += 1;
+        Ok(())
+    }
+
+    /// Reject a row before any of it is written, so a row is rendered whole
+    /// or not at all and the output stays a sequence of complete records
+    /// whatever the caller does after a failure.
+    fn check(&mut self, cells: &[Cell]) -> Result<(), Fail> {
+        for (i, cell) in cells.iter().enumerate() {
+            match cell {
+                Cell::Number { value, lexeme } => {
+                    number_text(*value, lexeme.as_deref(), &mut self.scratch)
+                        .map(|_| ())
+                        .map_err(|f| {
+                            f.at_path(format!(
+                                "column {:?}, row {}",
+                                self.labels[i],
+                                self.rows + 1
+                            ))
+                        })?;
+                }
+                Cell::Missing if self.options.missing == MissingText::Error => {
+                    return Err(Fail::new(
+                        Code::MissingValue,
+                        format!(
+                            "row {} has no value for column {:?}",
+                            self.rows + 1,
+                            self.labels[i]
+                        ),
+                    ));
+                }
+                _ => {}
+            }
+        }
         Ok(())
     }
 
@@ -505,6 +534,36 @@ mod tests {
             render(options, &["a"], &[vec![Cell::Missing]]).unwrap(),
             "\"a\"\r\n\"\"\r\n"
         );
+    }
+
+    #[test]
+    fn a_row_that_fails_writes_nothing_so_records_stay_whole() {
+        let mut r = CsvRenderer::new(StringOut::new(), CsvOptions::default()).unwrap();
+        let columns = cols(&["a", "b"]);
+        r.table_event(TableEvent::Schema(&columns)).unwrap();
+        let failing = [
+            (vec![s("x"), Cell::Missing], Code::MissingValue),
+            (vec![s("x"), num("1.")], Code::InvalidNumber),
+            (
+                vec![
+                    s("x"),
+                    Cell::Number {
+                        value: f64::NAN,
+                        lexeme: None,
+                    },
+                ],
+                Code::TargetValueUnrepresentable,
+            ),
+        ];
+        for (row, code) in &failing {
+            let err = r.table_event(TableEvent::Row(row)).unwrap_err();
+            assert_eq!(err.code, *code);
+            assert_eq!(r.out.as_str(), "\"a\",\"b\"\r\n", "{code}");
+        }
+        r.table_event(TableEvent::Row(&[s("y"), s("z")])).unwrap();
+        r.table_event(TableEvent::End).unwrap();
+        assert_eq!(r.rows(), 1);
+        assert_eq!(r.into_inner().as_str(), "\"a\",\"b\"\r\n\"y\",\"z\"\r\n");
     }
 
     #[test]

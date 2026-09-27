@@ -130,6 +130,20 @@ impl<S: Sink> RecordsToJson<S> {
                 self.labels.len()
             ))));
         }
+        if self.missing == MissingRecord::Error {
+            // Before any of the row is forwarded, so a row is emitted whole
+            // or not at all, as the CSV renderer renders it.
+            if let Some(i) = cells.iter().position(Cell::is_missing) {
+                return Err(self.fail(Fail::new(
+                    Code::MissingValue,
+                    format!(
+                        "row {} has no value for column {:?}",
+                        self.rows + 1,
+                        self.labels[i]
+                    ),
+                )));
+            }
+        }
         macro_rules! send {
             ($ev:expr) => {
                 if self.send($ev)? == Flow::Stop {
@@ -151,18 +165,9 @@ impl<S: Sink> RecordsToJson<S> {
                 }),
                 Cell::String(s) => JsonEvent::String(s),
                 Cell::Missing => match self.missing {
-                    MissingRecord::Skip => continue,
+                    // `Error` was rejected above, before the row began.
+                    MissingRecord::Skip | MissingRecord::Error => continue,
                     MissingRecord::Null => JsonEvent::Null,
-                    MissingRecord::Error => {
-                        return Err(self.fail(Fail::new(
-                            Code::MissingValue,
-                            format!(
-                                "row {} has no value for column {:?}",
-                                self.rows + 1,
-                                self.labels[i]
-                            ),
-                        )))
-                    }
                 },
             };
             // The label is borrowed for the call and the sink copies what it
@@ -359,15 +364,16 @@ mod tests {
                 End
             ]
         );
-        let err = run(
-            MissingRecord::Error,
-            &["a", "b"],
-            &[vec![s("x"), Cell::Missing]],
-        )
-        .unwrap_err();
+        let mut r = RecordsToJson::new(Vec::new()).with_missing(MissingRecord::Error);
+        let columns = cols(&["a", "b"]);
+        r.table_event(TableEvent::Schema(&columns)).unwrap();
+        let err = r
+            .table_event(TableEvent::Row(&[s("x"), Cell::Missing]))
+            .unwrap_err();
         assert_eq!(err.code, Code::MissingValue);
         assert!(err.message.contains("\"b\""));
-        assert!(err.committed_output);
+        assert!(err.committed_output, "the array start was forwarded");
+        assert_eq!(r.into_inner(), vec![ArrayStart], "nothing of the row was");
     }
 
     #[test]
