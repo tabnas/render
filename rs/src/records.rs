@@ -7,8 +7,8 @@
 //! emitted as it arrives and forgotten. Labels are data from the source's
 //! metadata, so a repeated label is not an error here (the CSV renderer
 //! allows it too); it is resolved the way a JSON reader would resolve a
-//! repeated member, by keeping the last value, and the output then carries
-//! each label once.
+//! repeated member in the un-deduplicated record, by keeping the last
+//! value that is there, and the output then carries each label once.
 
 use tabnas_transduce::{
     Cell, Code, Fail, Flow, JsonEvent, Number, PublicColumn, Sink, TableEvent, TableSink,
@@ -42,8 +42,10 @@ enum Phase {
 /// first, rows of the schema's width, one end, `PROTOCOL_ORDER_ERROR`
 /// otherwise. A schema with no columns is allowed, since an empty object
 /// is a JSON value; the CSV renderer's refusal is about CSV. When a label
-/// repeats, only the last column carrying it is emitted, in that column's
-/// position, so each record has each label once and holds the last value.
+/// repeats, each record carries it once, from the last column whose cell
+/// contributes a member (under `Skip` a `Missing` cell contributes none),
+/// in that column's position: the value a reader of the un-deduplicated
+/// record would keep, since a member that was never written cannot win.
 /// A failure found after events were forwarded is marked as having
 /// committed output, since the stage downstream may have rendered them.
 pub struct RecordsToJson<S: Sink> {
@@ -51,10 +53,18 @@ pub struct RecordsToJson<S: Sink> {
     missing: MissingRecord,
     phase: Phase,
     labels: Vec<Box<str>>,
-    /// Per column, whether it is the last with its label and so is emitted.
-    emit: Vec<bool>,
+    /// Per column, the next later column with the same label, so a row
+    /// can find the column that carries the label's value; `None` for the
+    /// common case of a label that does not repeat.
+    next_same: Vec<Option<usize>>,
     rows: u64,
     forwarded: bool,
+}
+
+/// Whether a cell contributes a member to its record under this policy:
+/// every cell but a `Missing` that is skipped.
+fn contributes(cell: &Cell, missing: MissingRecord) -> bool {
+    !(cell.is_missing() && missing == MissingRecord::Skip)
 }
 
 impl<S: Sink> RecordsToJson<S> {
@@ -64,7 +74,7 @@ impl<S: Sink> RecordsToJson<S> {
             missing: MissingRecord::Skip,
             phase: Phase::BeforeSchema,
             labels: Vec::new(),
-            emit: Vec::new(),
+            next_same: Vec::new(),
             rows: 0,
             forwarded: false,
         }
@@ -109,8 +119,8 @@ impl<S: Sink> RecordsToJson<S> {
             Phase::Done => return Err(self.fail(Fail::protocol("a schema after the end"))),
         }
         self.labels = columns.iter().map(|c| c.label.clone()).collect();
-        self.emit = (0..self.labels.len())
-            .map(|i| !self.labels[i + 1..].contains(&self.labels[i]))
+        self.next_same = (0..self.labels.len())
+            .map(|i| (i + 1..self.labels.len()).find(|&j| self.labels[j] == self.labels[i]))
             .collect();
         self.phase = Phase::Rows;
         self.send(JsonEvent::ArrayStart)
@@ -152,7 +162,7 @@ impl<S: Sink> RecordsToJson<S> {
             sink,
             missing,
             labels,
-            emit,
+            next_same,
             rows,
             forwarded,
             ..
@@ -170,7 +180,20 @@ impl<S: Sink> RecordsToJson<S> {
         }
         send!(JsonEvent::ObjectStart);
         for (i, cell) in cells.iter().enumerate() {
-            if !emit[i] {
+            if !contributes(cell, *missing) {
+                continue;
+            }
+            // A repeated label is written from the last column whose cell
+            // contributes; an earlier column's value is superseded only by
+            // a member that will actually be there.
+            let mut later = next_same.get(i).copied().flatten();
+            while let Some(j) = later {
+                if cells.get(j).is_some_and(|c| contributes(c, *missing)) {
+                    break;
+                }
+                later = next_same.get(j).copied().flatten();
+            }
+            if later.is_some() {
                 continue;
             }
             let value = match cell {
@@ -182,9 +205,10 @@ impl<S: Sink> RecordsToJson<S> {
                 }),
                 Cell::String(s) => JsonEvent::String(s),
                 Cell::Missing => match *missing {
-                    // `Error` was rejected above, before the row began.
-                    MissingRecord::Skip | MissingRecord::Error => continue,
                     MissingRecord::Null => JsonEvent::Null,
+                    // `Skip` does not contribute and was passed over above;
+                    // `Error` was rejected before the row began.
+                    MissingRecord::Skip | MissingRecord::Error => continue,
                 },
             };
             send!(JsonEvent::Key(&labels[i]));
@@ -393,10 +417,14 @@ mod tests {
     }
 
     #[test]
-    fn a_repeated_label_keeps_the_last_value_in_the_last_position() {
+    fn a_repeated_label_keeps_the_last_value_that_is_present() {
+        // Row two's last "a" is Missing and skipped, so the reader of the
+        // un-deduplicated record would keep "4"; row three has no "a" at
+        // all. Under `Null` the Missing member is there, and wins.
         let rows = vec![
             vec![s("1"), s("2"), s("3")],
             vec![s("4"), s("5"), Cell::Missing],
+            vec![Cell::Missing, s("6"), Cell::Missing],
         ];
         assert_eq!(
             run(MissingRecord::Skip, &["a", "b", "a"], &rows).unwrap(),
@@ -409,8 +437,47 @@ mod tests {
                 str("3"),
                 ObjectEnd,
                 ObjectStart,
+                key("a"),
+                str("4"),
                 key("b"),
                 str("5"),
+                ObjectEnd,
+                ObjectStart,
+                key("b"),
+                str("6"),
+                ObjectEnd,
+                ArrayEnd,
+                End
+            ]
+        );
+        assert_eq!(
+            run(MissingRecord::Null, &["a", "b", "a"], &rows[1..2]).unwrap(),
+            vec![
+                ArrayStart,
+                ObjectStart,
+                key("b"),
+                str("5"),
+                key("a"),
+                Null,
+                ObjectEnd,
+                ArrayEnd,
+                End
+            ]
+        );
+        // Three columns with one label: the middle one wins when the last
+        // is absent.
+        assert_eq!(
+            run(
+                MissingRecord::Skip,
+                &["a", "a", "a"],
+                &[vec![s("1"), s("2"), Cell::Missing]]
+            )
+            .unwrap(),
+            vec![
+                ArrayStart,
+                ObjectStart,
+                key("a"),
+                str("2"),
                 ObjectEnd,
                 ArrayEnd,
                 End

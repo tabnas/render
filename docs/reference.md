@@ -141,8 +141,13 @@ Error})`, default `Skip`, implements `TableSink` and produces
 per row with `Key(label)` and the cell as a scalar event in schema order,
 `ArrayEnd` and `End` at `End`. A `Missing` cell is left out (`Skip`),
 written as `null` (`Null`) or `MISSING_VALUE` (`Error`, raised before any
-of the row is forwarded). A repeated label
-is emitted once, in its last column's position, holding the last value.
+of the row is forwarded). A repeated label is emitted once per record,
+from the last column whose cell contributes a member (under `Skip` a
+`Missing` cell contributes none), in that column's position: labels
+`[a, b, a]` over the row `["4", "5", Missing]` give `{"a":"4","b":"5"}`,
+the value a reader of the un-deduplicated record would keep, since a
+member that was never written cannot win; under `Null` the same row gives
+`{"b":"5","a":null}`.
 Protocol validation is the CSV renderer's, except that zero columns is
 allowed (an empty object is a JSON value). `Flow::Stop` from the sink
 stops the row and propagates.
@@ -211,8 +216,12 @@ not done.
   rather than Rust's positional-only form (301 digits for `1e300`) or the
   strictly shorter of the two layouts (which would write `1000` as `1e3`).
 - `JsonOptions { indent: Some(0) }` is compact.
-- `RecordsToJson` allows zero columns and resolves repeated labels by
-  keeping the last column.
+- `RecordsToJson` allows zero columns and resolves repeated labels per
+  row, keeping the last column whose cell contributes a member. Emitting
+  every column and leaving the repeat to the reader (RFC 8259 permits it,
+  and CSV keeps every column) was the alternative; readers disagree on
+  repeated members, and this stage exists to hand the JSON renderer
+  events it need not second-guess.
 - No `Concat` helper: `Join` with an empty separator, or writing to the
   same `TextOut` in sequence, is concatenation; a type would add nothing.
 
