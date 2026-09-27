@@ -28,14 +28,22 @@ the budget goes to the writer directly. `with_limits(&Limits)` enforces
 BEFORE the fragment is accepted, so the failing fragment is never written
 (`RESOURCE_LIMIT_EXCEEDED`, `limit.name = "max_output_bytes"`).
 `with_metrics(Arc<Metrics>)` counts `output_bytes` when bytes reach the
-writer. A writer error is `OUTPUT_FAILED`; the buffer is not retried.
-`committed()` is the bytes the writer received, `accepted()` the bytes
-taken in; a failure after any byte was committed carries
-`committed_output`. `into_inner()` hands the writer back WITHOUT flushing:
-what was buffered and never flushed is dropped, so the writer holds
-exactly the bytes `committed()` counts, and a document that failed before
-its `End` does not reach the writer on the way out. A caller that wants
-the partial output anyway calls `flush()` first.
+writer. Bytes go to the writer through `write()` in a loop, as `write_all`
+does (an `Interrupted` error is retried; `Ok(0)` is `WriteZero`), and
+every write the writer accepts is counted before the next is tried. A
+writer error is `OUTPUT_FAILED`; the buffer is not retried. `committed()`
+is the bytes the writer accepted, `accepted()` the bytes taken in; a
+failure after any byte was committed carries `committed_output`. The
+count is per write, not per buffer: a writer that takes part of a buffer
+and then fails (a short write before `ENOSPC`, or up to a file-size
+limit) leaves `committed()` equal to the bytes it took, `output_bytes`
+the same, and the failure carrying `committed_output`, so a host prints
+`output: "partial"` for the bytes that are on disk. `into_inner()` hands
+the writer back WITHOUT flushing: what was buffered and never flushed is
+dropped, so the writer holds exactly the bytes `committed()` counts, the
+short write included, and a document that failed before its `End` does
+not reach the writer on the way out. A caller that wants the partial
+output anyway calls `flush()` first.
 
 `StringOut`: keeps the text (`as_str`, `into_string`); for tests and small
 results.
@@ -205,6 +213,13 @@ not done.
   been reported as `output: "none"`. Dropping them is the only teardown
   that keeps the flag honest; `flush()` is explicit for anyone who wants
   the partial output.
+- `WriteOut` counts committed bytes per `write()`, not per buffer.
+  `write_all` is all-or-nothing in what it reports, so a counter kept
+  beside it said the writer received nothing when the kernel had taken
+  the first 4 KiB of a buffer and refused the rest (a file on a full
+  file system, or under `RLIMIT_FSIZE`): `committed_output: false` and
+  `output: "none"` with a partial document on disk. The write loop is the
+  same one `write_all` runs, with the count moved inside it.
 - `Join`: a fragment outside an item is an item; unbalanced markers are
   protocol errors rather than panics.
 - `ReplaceText`: an empty literal is the identity; `flush` is a boundary.

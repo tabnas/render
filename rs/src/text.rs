@@ -83,9 +83,11 @@ pub const DEFAULT_BUDGET: usize = 32 * 1024;
 /// limit is checked on every fragment BEFORE it is accepted, counting the
 /// bytes buffered as well as the bytes written, so a run that would exceed
 /// `max_output_bytes` fails without emitting the fragment that crossed the
-/// line. `output_bytes` in the shared [`Metrics`] counts bytes handed to
-/// the writer, which is what "written to the output" means to a caller
-/// reading the metrics after a failure.
+/// line. `output_bytes` in the shared [`Metrics`] counts bytes the writer
+/// accepted, which is what "written to the output" means to a caller
+/// reading the metrics after a failure; like `committed()`, it is kept
+/// per `write` call, so the part of a buffer a writer took before failing
+/// is counted.
 pub struct WriteOut<W: io::Write> {
     writer: W,
     buf: Vec<u8>,
@@ -94,8 +96,10 @@ pub struct WriteOut<W: io::Write> {
     metrics: Option<Arc<Metrics>>,
     /// Bytes accepted: buffered or written.
     accepted: u64,
-    /// Bytes handed to the writer. Nonzero means a later failure finds
-    /// committed output.
+    /// Bytes the writer accepted, counted write by write rather than
+    /// buffer by buffer, so a writer that took part of a buffer and then
+    /// failed is counted for the part it took. Nonzero means a later
+    /// failure finds committed output.
     committed: u64,
 }
 
@@ -137,18 +141,20 @@ impl<W: io::Write> WriteOut<W> {
         self.accepted
     }
 
-    /// Bytes that reached the writer.
+    /// Bytes the writer accepted, including the bytes of a short write
+    /// that a failure cut off: after `OUTPUT_FAILED` this is what the
+    /// writer holds, not the buffers that were sent whole.
     pub fn committed(&self) -> u64 {
         self.committed
     }
 
     /// Hand the writer back WITHOUT flushing. Whatever the buffer still
     /// holds is dropped, so the writer holds exactly the bytes `committed()`
-    /// counts: a document that failed before its `End` does not reach the
-    /// writer on the way out, which is what a failure that reported no
-    /// committed output promised the host. A renderer flushes once, at its
-    /// `End`, and a caller that wants a partial output anyway calls `flush`
-    /// first, knowingly.
+    /// counts, a short write before a failure included: a document that
+    /// failed before its `End` does not reach the writer on the way out,
+    /// which is what a failure that reported no committed output promised
+    /// the host. A renderer flushes once, at its `End`, and a caller that
+    /// wants a partial output anyway calls `flush` first, knowingly.
     pub fn into_inner(self) -> W {
         self.writer
     }
@@ -162,16 +168,41 @@ impl<W: io::Write> WriteOut<W> {
         }
     }
 
-    fn send(&mut self, bytes: &[u8]) -> Result<(), Fail> {
-        if let Err(e) = self.writer.write_all(bytes) {
-            // The buffer is not retried: a failed writer is done, and the
-            // caller learns how many bytes it received before that.
-            self.buf.clear();
-            return Err(self.fail_io(e));
-        }
-        self.committed += bytes.len() as u64;
-        if let Some(m) = &self.metrics {
-            Metrics::add(&m.output_bytes, bytes.len() as u64);
+    /// Write `bytes` through `write`, as `write_all` does, but counting
+    /// every write the writer accepted before going on to the next. A
+    /// writer may take part of a buffer and then fail (a short write to a
+    /// full disk, or up to a file-size limit): `write_all` would report
+    /// only the error, and a counter kept per buffer would then say the
+    /// writer received nothing while the kernel holds the part it took.
+    /// Counting per write keeps `committed()` equal to what the writer
+    /// holds, whichever write failed. `Interrupted` is retried and `Ok(0)`
+    /// is `WriteZero`, as in `write_all`.
+    fn send(&mut self, mut bytes: &[u8]) -> Result<(), Fail> {
+        while !bytes.is_empty() {
+            match self.writer.write(bytes) {
+                Ok(0) => {
+                    self.buf.clear();
+                    return Err(self.fail_io(io::Error::new(
+                        io::ErrorKind::WriteZero,
+                        "failed to write whole buffer",
+                    )));
+                }
+                Ok(n) => {
+                    self.committed += n as u64;
+                    if let Some(m) = &self.metrics {
+                        Metrics::add(&m.output_bytes, n as u64);
+                    }
+                    bytes = &bytes[n..];
+                }
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                Err(e) => {
+                    // The buffer is not retried: a failed writer is done,
+                    // and the caller learns how many bytes it accepted
+                    // before that, the short write included.
+                    self.buf.clear();
+                    return Err(self.fail_io(e));
+                }
+            }
         }
         Ok(())
     }
@@ -508,8 +539,9 @@ mod tests {
     use super::*;
     use tabnas_transduce::Code;
 
-    /// A writer that records each `write_all` as one chunk, so coalescing
-    /// is observable, and fails after a set number of bytes when asked.
+    /// A writer that records each `write` as one chunk, so coalescing is
+    /// observable, and fails after a set number of bytes when asked. It
+    /// takes a buffer whole or refuses it whole: the all-or-nothing writer.
     #[derive(Default, Debug)]
     struct Chunks {
         chunks: Vec<Vec<u8>>,
@@ -667,6 +699,279 @@ mod tests {
         let err = out.write_str("x").unwrap_err();
         assert_eq!(err.code, Code::OutputFailed);
         assert!(!err.committed_output);
+    }
+
+    /// A writer with room for `room` bytes that takes what fits of each
+    /// write, as `io::Write` permits, and fails once it is full: the short
+    /// write before "no space left on device".
+    #[derive(Debug)]
+    struct Cramped {
+        room: usize,
+        taken: Vec<u8>,
+    }
+
+    impl Cramped {
+        fn with_room(room: usize) -> Self {
+            Cramped {
+                room,
+                taken: Vec::new(),
+            }
+        }
+    }
+
+    impl io::Write for Cramped {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            let left = self.room - self.taken.len();
+            if left == 0 {
+                return Err(io::Error::other("disk full"));
+            }
+            let n = buf.len().min(left);
+            self.taken.extend_from_slice(&buf[..n]);
+            Ok(n)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_short_write_before_the_failure_counts_the_bytes_the_writer_took() {
+        // Buffered, then flushed: the writer takes three bytes of the six
+        // and fails on the rest.
+        let metrics = Metrics::new();
+        let mut out = WriteOut::new(Cramped::with_room(3))
+            .with_budget(100)
+            .with_metrics(Arc::clone(&metrics));
+        out.write_str("abc").unwrap();
+        out.write_str("def").unwrap();
+        assert_eq!(out.committed(), 0, "still buffered");
+        let err = out.flush().unwrap_err();
+        assert_eq!(err.code, Code::OutputFailed);
+        assert!(err.message.contains("disk full"));
+        assert!(
+            err.committed_output,
+            "three bytes reached the writer before it failed"
+        );
+        assert!(out.has_committed());
+        assert_eq!(out.committed(), 3);
+        assert_eq!(out.accepted(), 6);
+        assert_eq!(Metrics::get(&metrics.output_bytes), 3);
+        let w = out.into_inner();
+        assert_eq!(
+            w.taken, b"abc",
+            "the writer holds exactly committed() bytes"
+        );
+
+        // Written directly: a fragment as large as the budget takes the
+        // same path and is counted the same way.
+        let mut out = WriteOut::new(Cramped::with_room(2)).with_budget(0);
+        let err = out.write_str("abcdef").unwrap_err();
+        assert_eq!(err.code, Code::OutputFailed);
+        assert!(err.committed_output);
+        assert_eq!(out.committed(), 2);
+        assert_eq!(out.accepted(), 0, "the fragment was not accepted");
+        assert_eq!(out.into_inner().taken, b"ab");
+
+        // No room at all: nothing was taken, and the failure says so.
+        let mut out = WriteOut::new(Cramped::with_room(0)).with_budget(0);
+        let err = out.write_str("abc").unwrap_err();
+        assert_eq!(err.code, Code::OutputFailed);
+        assert!(!err.committed_output);
+        assert!(!out.has_committed());
+        assert_eq!(out.committed(), 0);
+        assert!(out.into_inner().taken.is_empty());
+    }
+
+    /// A writer that accepts nothing and reports no error, which
+    /// `io::Write` allows and `write_all` treats as the end of the writer.
+    struct Zero;
+
+    impl io::Write for Zero {
+        fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+            Ok(0)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_writer_that_takes_nothing_is_write_zero_not_a_spin() {
+        let mut out = WriteOut::new(Zero).with_budget(0);
+        let err = out.write_str("abc").unwrap_err();
+        assert_eq!(err.code, Code::OutputFailed);
+        assert!(err.message.contains("failed to write whole buffer"));
+        assert!(!err.committed_output);
+        assert_eq!(out.committed(), 0);
+    }
+
+    /// A writer that is interrupted before every write it accepts.
+    #[derive(Default)]
+    struct Interrupting {
+        taken: Vec<u8>,
+        interruptions: usize,
+        ready: bool,
+    }
+
+    impl io::Write for Interrupting {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            if !self.ready {
+                self.ready = true;
+                self.interruptions += 1;
+                return Err(io::Error::from(io::ErrorKind::Interrupted));
+            }
+            self.ready = false;
+            self.taken.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn an_interrupted_write_is_retried_and_counted_once() {
+        let mut out = WriteOut::new(Interrupting::default()).with_budget(4);
+        out.write_str("abcd").unwrap();
+        out.write_str("efgh").unwrap();
+        out.flush().unwrap();
+        assert_eq!(out.committed(), 8);
+        let w = out.into_inner();
+        assert_eq!(w.taken, b"abcdefgh");
+        assert_eq!(w.interruptions, 2, "one retry per buffer, none counted");
+    }
+
+    /// The environment variable that marks the process running under the
+    /// file-size limit in the test below.
+    #[cfg(unix)]
+    const SHORT_WRITE_CHILD: &str = "TABNAS_RENDER_SHORT_WRITE_CHILD";
+
+    /// The half of the test that runs under the limit: a real file, a
+    /// buffer larger than the limit, one flush. It reports on standard
+    /// output with a `short-write:` line, which the parent reads.
+    #[cfg(unix)]
+    fn short_write_child() {
+        println!("short-write: start");
+        let path = std::env::temp_dir().join(format!(
+            "tabnas-render-short-write-{}.txt",
+            std::process::id()
+        ));
+        let file = std::fs::File::create(&path).expect("create the output file");
+        let metrics = Metrics::new();
+        let mut out = WriteOut::new(file).with_metrics(Arc::clone(&metrics));
+        let text = "0123456789abcdef".repeat(1000);
+        out.write_str(&text).unwrap();
+        assert_eq!(
+            out.committed(),
+            0,
+            "under the default budget it is buffered"
+        );
+        let result = out.flush();
+        let committed = out.committed();
+        let has_committed = out.has_committed();
+        let output_bytes = Metrics::get(&metrics.output_bytes);
+        let file = out.into_inner();
+        let on_disk = file.metadata().map(|m| m.len());
+        drop(file);
+        let _ = std::fs::remove_file(&path);
+        let on_disk = on_disk.expect("the file's length");
+        match result {
+            Ok(()) => println!(
+                "short-write: skipped, no file-size limit was in force ({on_disk} bytes on disk)"
+            ),
+            Err(err) if committed == 0 && on_disk == 0 => println!(
+                "short-write: skipped, the limit refused the write whole: {}",
+                err.message
+            ),
+            Err(err) => {
+                println!(
+                    "short-write: ran committed={committed} on_disk={on_disk} \
+                     output_bytes={output_bytes} code={:?} committed_output={}",
+                    err.code, err.committed_output
+                );
+                assert_eq!(err.code, Code::OutputFailed);
+                assert!(
+                    err.committed_output,
+                    "the kernel took part of the buffer, so output is partial"
+                );
+                assert!(has_committed);
+                assert_eq!(
+                    committed, on_disk,
+                    "committed() must be what the file holds"
+                );
+                assert_eq!(output_bytes, committed);
+                assert!(committed < text.len() as u64, "the limit cut the write");
+            }
+        }
+    }
+
+    /// The short write the reviewer reproduced on a full file system, on a
+    /// real file: the kernel accepts the bytes up to the limit and refuses
+    /// the rest, and the file on disk holds exactly `committed()` bytes.
+    /// `RLIMIT_FSIZE` is the limit that needs no privileges; it is set per
+    /// process by the shell's `ulimit -f`, so the run happens in a child
+    /// process (this binary, this test, with `SHORT_WRITE_CHILD` set), and
+    /// the shell ignores `SIGXFSZ` first so that the write past the limit
+    /// fails with `EFBIG` instead of ending the child. Where no shell can
+    /// impose the limit, the test says so and passes.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_under_a_size_limit_holds_exactly_the_committed_bytes() {
+        use std::process::Command;
+
+        if std::env::var_os(SHORT_WRITE_CHILD).is_some() {
+            short_write_child();
+            return;
+        }
+        let exe = std::env::current_exe().expect("the test binary");
+        let module = module_path!()
+            .split_once("::")
+            .map_or(module_path!(), |(_, m)| m);
+        let name = format!("{module}::a_file_under_a_size_limit_holds_exactly_the_committed_bytes");
+        let output = match Command::new("sh")
+            .arg("-c")
+            .arg(r#"trap "" XFSZ && ulimit -f 8 && exec "$0" "$@""#)
+            .arg(&exe)
+            .args(["--exact", &name, "--nocapture"])
+            .env(SHORT_WRITE_CHILD, "1")
+            .output()
+        {
+            Ok(output) => output,
+            Err(e) => {
+                eprintln!("skipped: no `sh` to impose a file-size limit with ({e})");
+                return;
+            }
+        };
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let report = stdout.lines().rfind(|l| l.starts_with("short-write: "));
+        match report {
+            Some(line) if line.starts_with("short-write: ran") => {
+                // The child's own assertions ran; its report is worth
+                // seeing under `--nocapture`.
+                println!("{line}");
+                assert!(
+                    output.status.success(),
+                    "the run under the limit failed: {line}\n{stdout}\n{stderr}"
+                );
+            }
+            Some(line) if line.starts_with("short-write: skipped") => eprintln!("{line}"),
+            Some(line) => panic!(
+                "the child stopped after `{line}` with status {}:\n{stdout}\n{stderr}",
+                output.status
+            ),
+            None if stdout.contains("running ") => {
+                panic!("the child ran the harness but not the test:\n{stdout}\n{stderr}")
+            }
+            None => eprintln!(
+                "skipped: the shell could not impose a file-size limit (status {}): {}",
+                output.status,
+                stderr.trim()
+            ),
+        }
     }
 
     #[test]
