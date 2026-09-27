@@ -9,7 +9,9 @@
 //!   to; [`WriteOut`], which coalesces fragments to a byte budget, enforces
 //!   `max_output_bytes` and counts `output_bytes`; [`StringOut`] for tests
 //!   and small results; [`Join`] and [`ReplaceText`], the two text
-//!   combinators whose correctness depends on chunk boundaries.
+//!   combinators whose correctness depends on chunk boundaries, and
+//!   [`Concat`], a `Join` with no separator under the name the language
+//!   gives it.
 //! - [`csv`]: [`CsvRenderer`], the always-quoted profile of `TableRows/1`,
 //!   with [`CsvOptions`] for the dialects.
 //! - [`json`]: [`JsonRenderer`], `JsonEvents/1` as compact or indented
@@ -41,7 +43,7 @@ pub use csv::{CsvOptions, CsvRenderer, MissingText, Newline, Quoting};
 pub use json::{JsonOptions, JsonRenderer};
 pub use number::is_json_number;
 pub use records::{MissingRecord, RecordsToJson};
-pub use text::{Join, ReplaceText, StringOut, TextOut, WriteOut, DEFAULT_BUDGET};
+pub use text::{Concat, Join, ReplaceText, StringOut, TextOut, WriteOut, DEFAULT_BUDGET};
 
 /// This crate's version, as `Cargo.toml` declares it.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

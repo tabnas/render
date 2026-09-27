@@ -67,7 +67,7 @@ standard transducer to be the only one.
 
 | Path | What it is |
 |---|---|
-| `rs/src/text.rs` | `TextOut`, `WriteOut` (coalescing, the output limit, `output_bytes`), `StringOut`, `Join`, `ReplaceText` |
+| `rs/src/text.rs` | `TextOut` (with `has_committed`), `WriteOut` (coalescing, the output limit, `output_bytes`), `StringOut`, `Join`, `Concat`, `ReplaceText` |
 | `rs/src/csv.rs` | `CsvOptions`, `CsvRenderer` (a `TableSink`) |
 | `rs/src/json.rs` | `JsonOptions`, `JsonRenderer` (a `Sink`) |
 | `rs/src/records.rs` | `RecordsToJson` (`TableRows/1` → `JsonEvents/1`), `MissingRecord` |

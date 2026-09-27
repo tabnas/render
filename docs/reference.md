@@ -48,6 +48,11 @@ an item of its own. `item_start` inside an item and `item_end` with none
 open are `PROTOCOL_ORDER_ERROR`. `flush` flushes the output beneath and
 leaves an open item open.
 
+`Concat<O>`: `new(out)`, a `Join` with no separator under the name the
+design brief and the language give it. Fragments are appended as they
+are; `item_start`, `item_end` and `items` behave as `Join`'s do, so the
+interpreter's `concat` and `join` share one shape.
+
 `ReplaceText<O>`: `new(out, from, to)`. Every occurrence of `from` becomes
 `to`, with `str::replace`'s left-to-right non-overlapping matches, however
 the text is chunked: at most `from.len() - 1` bytes (the longest suffix
@@ -222,8 +227,10 @@ not done.
   and CSV keeps every column) was the alternative; readers disagree on
   repeated members, and this stage exists to hand the JSON renderer
   events it need not second-guess.
-- No `Concat` helper: `Join` with an empty separator, or writing to the
-  same `TextOut` in sequence, is concatenation; a type would add nothing.
+- `Concat` is a newtype over `Join` with an empty separator. Concatenation
+  needs no type of its own (writing to one `TextOut` in sequence is
+  concatenation), but the brief lists the type among the text helpers and
+  the language names it, so the surface exists and is as thin as it can be.
 
 ## Measured
 

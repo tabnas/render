@@ -348,6 +348,55 @@ impl<O: TextOut> TextOut for Join<O> {
     }
 }
 
+/// Concatenation: a [`Join`] with no separator, under the name the design
+/// brief and the language give it.
+///
+/// Every fragment is appended as it is. The item markers are accepted and
+/// counted all the same, so the interpreter's `concat` and `join` share
+/// one shape and a program can move between them without the calls around
+/// them changing; that shared shape is the whole reason for a type where a
+/// bare output would do.
+pub struct Concat<O: TextOut>(Join<O>);
+
+impl<O: TextOut> Concat<O> {
+    pub fn new(out: O) -> Self {
+        Concat(Join::new(out, ""))
+    }
+
+    /// Begin an item; see [`Join::item_start`].
+    pub fn item_start(&mut self) -> Result<(), Fail> {
+        self.0.item_start()
+    }
+
+    /// End the current item; see [`Join::item_end`].
+    pub fn item_end(&mut self) -> Result<(), Fail> {
+        self.0.item_end()
+    }
+
+    /// Items begun so far.
+    pub fn items(&self) -> u64 {
+        self.0.items()
+    }
+
+    pub fn into_inner(self) -> O {
+        self.0.into_inner()
+    }
+}
+
+impl<O: TextOut> TextOut for Concat<O> {
+    fn write_str(&mut self, s: &str) -> Result<(), Fail> {
+        self.0.write_str(s)
+    }
+
+    fn flush(&mut self) -> Result<(), Fail> {
+        self.0.flush()
+    }
+
+    fn has_committed(&self) -> bool {
+        self.0.has_committed()
+    }
+}
+
 /// Replaces every occurrence of a fixed literal, across fragment
 /// boundaries.
 ///
@@ -723,6 +772,35 @@ mod tests {
         assert_eq!(j.item_end().unwrap_err().code, Code::ProtocolOrderError);
         j.item_start().unwrap();
         assert_eq!(j.item_start().unwrap_err().code, Code::ProtocolOrderError);
+    }
+
+    #[test]
+    fn concat_appends_items_and_fragments_with_nothing_between_them() {
+        let mut c = Concat::new(StringOut::new());
+        c.item_start().unwrap();
+        c.write_str("a").unwrap();
+        c.write_str("b").unwrap();
+        c.item_end().unwrap();
+        c.item_start().unwrap();
+        c.item_end().unwrap();
+        c.write_str("c").unwrap();
+        c.flush().unwrap();
+        assert_eq!(c.items(), 3);
+        assert!(c.has_committed());
+        assert_eq!(c.into_inner().as_str(), "abc");
+    }
+
+    #[test]
+    fn concat_keeps_joins_item_discipline() {
+        let mut c = Concat::new(WriteOut::new(Vec::new()));
+        assert_eq!(c.item_end().unwrap_err().code, Code::ProtocolOrderError);
+        c.item_start().unwrap();
+        assert_eq!(c.item_start().unwrap_err().code, Code::ProtocolOrderError);
+        c.write_str("x").unwrap();
+        assert!(!c.has_committed(), "buffered beneath, not yet written");
+        c.item_end().unwrap();
+        c.flush().unwrap();
+        assert_eq!(c.into_inner().into_inner(), b"x");
     }
 
     /// Feed `text` to a replacer split at `at`, then flushed, and give the
