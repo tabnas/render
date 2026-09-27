@@ -7,8 +7,12 @@
 
 #![forbid(unsafe_code)]
 
+pub mod csv;
+pub mod number;
 pub mod text;
 
+pub use csv::{CsvOptions, CsvRenderer, MissingText, Newline, Quoting};
+pub use number::is_json_number;
 pub use text::{Join, ReplaceText, StringOut, TextOut, WriteOut, DEFAULT_BUDGET};
 
 /// This crate's version, as `Cargo.toml` declares it.
