@@ -15,7 +15,7 @@
 //! standard ones are: one root value, keys only where a member begins,
 //! balanced containers, one end.
 
-use tabnas_transduce::{write_json_string, Fail, Flow, JsonEvent, Number, Sink};
+use tabnas_transduce::{Fail, Flow, JsonEvent, Number, Sink};
 
 use crate::number::{check_number, write_value};
 use crate::text::TextOut;
@@ -114,14 +114,29 @@ impl<O: TextOut> JsonRenderer<O> {
         self.out.write_str(s)
     }
 
-    /// The escaped form of `s`, written through the reused scratch buffer.
+    /// The escaped form of `s`, streamed: each run that needs no escaping
+    /// is written as it is and each escape as it comes, so the renderer
+    /// never holds a copy of a scalar. Building the escaped text first would
+    /// keep up to six bytes per byte of the largest string seen for the
+    /// renderer's whole life, against the promise that nothing here holds a
+    /// document.
     fn put_string(&mut self, s: &str) -> Result<(), Fail> {
-        let mut scratch = std::mem::take(&mut self.scratch);
-        scratch.clear();
-        write_json_string(s, &mut scratch);
-        let r = self.put(&scratch);
-        self.scratch = scratch;
-        r
+        self.put("\"")?;
+        let mut rest = s;
+        while let Some((i, width, escaped)) = rest
+            .char_indices()
+            .find_map(|(i, c)| escape(c).map(|e| (i, c.len_utf8(), e)))
+        {
+            if i > 0 {
+                self.put(&rest[..i])?;
+            }
+            self.put(escaped)?;
+            rest = &rest[i + width..];
+        }
+        if !rest.is_empty() {
+            self.put(rest)?;
+        }
+        self.put("\"")
     }
 
     /// Write a number that [`check_number`] has passed: the lexeme as it
@@ -311,6 +326,29 @@ impl<O: TextOut> JsonRenderer<O> {
     }
 }
 
+/// The `\u00XX` forms of the control characters, the short escapes RFC 8259
+/// names among them, indexed by code point.
+const CONTROL: [&str; 32] = [
+    "\\u0000", "\\u0001", "\\u0002", "\\u0003", "\\u0004", "\\u0005", "\\u0006", "\\u0007", "\\b",
+    "\\t", "\\n", "\\u000b", "\\f", "\\r", "\\u000e", "\\u000f", "\\u0010", "\\u0011", "\\u0012",
+    "\\u0013", "\\u0014", "\\u0015", "\\u0016", "\\u0017", "\\u0018", "\\u0019", "\\u001a",
+    "\\u001b", "\\u001c", "\\u001d", "\\u001e", "\\u001f",
+];
+
+/// The escape RFC 8259 requires for `c`, or `None` when the character is
+/// written as itself: `"`, `\` and the control characters, and no more,
+/// because the output is UTF-8 and an escape would only make it longer.
+fn escape(c: char) -> Option<&'static str> {
+    match c {
+        '"' => Some("\\\""),
+        '\\' => Some("\\\\"),
+        // Below 0x20 the index is within the table; `get` says so without
+        // a panic path.
+        c if (c as u32) < 0x20 => CONTROL.get(c as usize).copied(),
+        _ => None,
+    }
+}
+
 impl<O: TextOut> Sink for JsonRenderer<O> {
     fn event(&mut self, ev: JsonEvent<'_>) -> Result<Flow, Fail> {
         match ev {
@@ -460,6 +498,64 @@ mod tests {
             compact(&[ObjectStart, Key("k\"\n"), Null, ObjectEnd, End]).unwrap(),
             "{\"k\\\"\\n\":null}"
         );
+    }
+
+    /// A `TextOut` that keeps every fragment apart, so streaming is
+    /// observable.
+    #[derive(Default)]
+    struct Fragments(Vec<std::string::String>);
+
+    impl TextOut for Fragments {
+        fn write_str(&mut self, s: &str) -> Result<(), Fail> {
+            self.0.push(s.to_owned());
+            Ok(())
+        }
+
+        fn flush(&mut self) -> Result<(), Fail> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn strings_escape_exactly_as_transduce_does() {
+        let mut every_control = std::string::String::new();
+        for c in 0u32..0x20 {
+            every_control.push(char::from_u32(c).unwrap_or(' '));
+            every_control.push('x');
+        }
+        for text in [
+            "",
+            "plain",
+            "\"",
+            "\\",
+            "\"\\\"\\",
+            "a\"b\\c\nd",
+            every_control.as_str(),
+            "é 日本 🚀 \u{7f} \u{80} \u{2028} \u{ffff}",
+            "ends with control \u{1}",
+            "\u{1} starts with control",
+        ] {
+            let mut want = std::string::String::new();
+            tabnas_transduce::write_json_string(text, &mut want);
+            assert_eq!(compact(&[String(text), End]).unwrap(), want, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn strings_are_streamed_in_runs_and_never_copied_whole() {
+        let mut r = JsonRenderer::new(Fragments::default(), JsonOptions::default());
+        r.event(String("ab\"cd\n\u{1}ef")).unwrap();
+        assert_eq!(
+            r.out.0,
+            ["\"", "ab", "\\\"", "cd", "\\n", "\\u0001", "ef", "\""]
+        );
+        // A long string of control characters, six bytes of output each,
+        // leaves nothing behind in the renderer.
+        let big = "\u{1}".repeat(64 * 1024);
+        let mut r = JsonRenderer::new(StringOut::new(), JsonOptions::default());
+        r.event(String(&big)).unwrap();
+        assert_eq!(r.out.as_str().len(), big.len() * 6 + 2);
+        assert_eq!(r.scratch.capacity(), 0, "strings do not touch the scratch");
     }
 
     #[test]

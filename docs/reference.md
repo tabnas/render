@@ -103,9 +103,12 @@ non-empty container, and `": "` after a key; `None` or `Some(0)` is
 compact. Empty containers are `{}` and `[]` in both profiles.
 
 `JsonRenderer::new(out, options)` implements `Sink`. Strings and keys are
-escaped by `tabnas_transduce::write_json_string`: `"`, `\`, `\b`, `\f`,
-`\n`, `\r`, `\t`, other control characters as `\u00XX`, everything else
-(non-ASCII included) as itself. Numbers follow the CSV rules above: a
+escaped as RFC 8259 requires and no more: `"`, `\`, `\b`, `\f`, `\n`,
+`\r`, `\t`, other control characters as `\u00XX`, everything else
+(non-ASCII included) as itself; the tests hold the escaping to
+`tabnas_transduce::write_json_string`. The escaped text is streamed, run by
+run and escape by escape, so the renderer never holds a copy of a string,
+however long. Numbers follow the CSV rules above: a
 lexeme is validated (`INVALID_NUMBER`) and written, a value without one
 takes the shortest form described under Numbers, and NaN and infinity are
 `TARGET_VALUE_UNREPRESENTABLE`, lexeme or not: `1e999` spells a number,
