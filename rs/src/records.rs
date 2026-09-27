@@ -144,16 +144,33 @@ impl<S: Sink> RecordsToJson<S> {
                 )));
             }
         }
+        // The sink copies what it keeps, as the protocol says, so a key is
+        // the label borrowed and the row costs no allocation. The fields
+        // are borrowed apart from one another for that: the sink and the
+        // forwarded flag mutably for the sends, the labels for the keys.
+        let RecordsToJson {
+            sink,
+            missing,
+            labels,
+            emit,
+            rows,
+            forwarded,
+            ..
+        } = self;
+        let mut send = |ev: JsonEvent<'_>| -> Result<Flow, Fail> {
+            *forwarded = true;
+            sink.event(ev)
+        };
         macro_rules! send {
             ($ev:expr) => {
-                if self.send($ev)? == Flow::Stop {
+                if send($ev)? == Flow::Stop {
                     return Ok(Flow::Stop);
                 }
             };
         }
         send!(JsonEvent::ObjectStart);
         for (i, cell) in cells.iter().enumerate() {
-            if !self.emit[i] {
+            if !emit[i] {
                 continue;
             }
             let value = match cell {
@@ -164,21 +181,17 @@ impl<S: Sink> RecordsToJson<S> {
                     lexeme: lexeme.as_deref(),
                 }),
                 Cell::String(s) => JsonEvent::String(s),
-                Cell::Missing => match self.missing {
+                Cell::Missing => match *missing {
                     // `Error` was rejected above, before the row began.
                     MissingRecord::Skip | MissingRecord::Error => continue,
                     MissingRecord::Null => JsonEvent::Null,
                 },
             };
-            // The label is borrowed for the call and the sink copies what it
-            // keeps, as the protocol says; cloning it out lets `self` be
-            // borrowed mutably for the send.
-            let label = self.labels[i].clone();
-            send!(JsonEvent::Key(&label));
+            send!(JsonEvent::Key(&labels[i]));
             send!(value);
         }
         send!(JsonEvent::ObjectEnd);
-        self.rows += 1;
+        *rows += 1;
         Ok(Flow::Continue)
     }
 
@@ -437,6 +450,30 @@ mod tests {
         }
         assert_eq!(r.rows(), 0);
         assert_eq!(r.into_inner(), vec![ArrayStart, ArrayEnd, End]);
+    }
+
+    #[test]
+    fn keys_borrow_the_schemas_labels_rather_than_copying_them_per_cell() {
+        // Two live allocations cannot share an address, so a key that is a
+        // per-cell copy of the label would point elsewhere than the label
+        // the stage retains; the same address on every row proves the
+        // borrow (and, with it, the absence of the allocation).
+        let mut seen: Vec<usize> = Vec::new();
+        let sink = FnSink(|ev: JsonEvent<'_>| {
+            if let JsonEvent::Key(k) = ev {
+                seen.push(k.as_ptr() as usize);
+            }
+            Ok(Flow::Continue)
+        });
+        let mut r = RecordsToJson::new(sink);
+        let columns = cols(&["first", "second"]);
+        r.table_event(TableEvent::Schema(&columns)).unwrap();
+        let row = [s("x"), Cell::Null];
+        r.table_event(TableEvent::Row(&row)).unwrap();
+        r.table_event(TableEvent::Row(&row)).unwrap();
+        let labels: Vec<usize> = r.labels.iter().map(|l| l.as_ptr() as usize).collect();
+        drop(r);
+        assert_eq!(seen, [labels.clone(), labels].concat());
     }
 
     #[test]
