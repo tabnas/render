@@ -191,9 +191,11 @@ fn csv_chain() -> TableFromJson<CsvRenderer<WriteOut<io::Sink>>> {
 /// The incremental source over the JSON grammar, pruning each streamed
 /// record from the tree as aless runs it.
 fn incremental(src: &str) -> ParserSource<'_> {
-    ParserSource::new(tabnas_json::make(), src).mode(SourceMode::Incremental {
-        prune: Prune::Under(records_selector()),
-    })
+    ParserSource::new(tabnas_json::make(), src)
+        .grammar("json")
+        .mode(SourceMode::Incremental {
+            prune: Prune::Under(records_selector()),
+        })
 }
 
 fn json_to_csv(c: &mut Criterion) {
