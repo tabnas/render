@@ -50,7 +50,7 @@ csv.table_event(TableEvent::Row(&[
 csv.table_event(TableEvent::Row(&[Cell::Null, Cell::Bool(false)]))?;
 csv.table_event(TableEvent::End)?;   // flushes the writer
 
-let bytes = csv.into_inner().into_inner()?;
+let bytes = csv.into_inner().into_inner();   // hands the Vec back; never flushes
 assert_eq!(
     String::from_utf8(bytes).unwrap(),
     "\"name\",\"balance\"\r\n\"Ada, \"\"the\"\" first\",\"50.250\"\r\n\"\",\"false\"\r\n"

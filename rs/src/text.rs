@@ -121,13 +121,15 @@ impl<W: io::Write> WriteOut<W> {
         self.committed
     }
 
-    /// Flush what is buffered and hand the writer back. A failure here is
-    /// the flush's; the writer is gone with it, which is why a renderer
-    /// flushes at its `End` and a caller inspects the result before taking
-    /// the writer.
-    pub fn into_inner(mut self) -> Result<W, Fail> {
-        self.flush()?;
-        Ok(self.writer)
+    /// Hand the writer back WITHOUT flushing. Whatever the buffer still
+    /// holds is dropped, so the writer holds exactly the bytes `committed()`
+    /// counts: a document that failed before its `End` does not reach the
+    /// writer on the way out, which is what a failure that reported no
+    /// committed output promised the host. A renderer flushes once, at its
+    /// `End`, and a caller that wants a partial output anyway calls `flush`
+    /// first, knowingly.
+    pub fn into_inner(self) -> W {
+        self.writer
     }
 
     fn fail_io(&self, e: io::Error) -> Fail {
@@ -419,7 +421,7 @@ mod tests {
 
     /// A writer that records each `write_all` as one chunk, so coalescing
     /// is observable, and fails after a set number of bytes when asked.
-    #[derive(Default)]
+    #[derive(Default, Debug)]
     struct Chunks {
         chunks: Vec<Vec<u8>>,
         flushes: usize,
@@ -466,7 +468,8 @@ mod tests {
             vec![b"abcdefgh".to_vec(), b"i".to_vec(), b"0123456789".to_vec()]
         );
         out.write_str("z").unwrap();
-        let w = out.into_inner().unwrap();
+        out.flush().unwrap();
+        let w = out.into_inner();
         assert_eq!(joined(&w.chunks), "abcdefghi0123456789z");
         assert_eq!(w.flushes, 1);
     }
@@ -501,9 +504,41 @@ mod tests {
         // before the failure and the failure says so.
         assert!(err.committed_output);
         assert_eq!(out.accepted(), 9);
-        let w = out.into_inner().unwrap();
+        // "worl" is as large as the budget, so it went to the writer too;
+        // the writer holds what `committed()` says and nothing more.
+        assert_eq!(out.committed(), 9);
+        let w = out.into_inner();
         assert_eq!(joined(&w.chunks), "helloworl");
         assert_eq!(Metrics::get(&metrics.output_bytes), 9);
+    }
+
+    #[test]
+    fn into_inner_after_a_failure_hands_back_exactly_the_committed_bytes() {
+        let limits = Limits {
+            max_output_bytes: Some(5),
+            ..Limits::default()
+        };
+        let mut out = WriteOut::new(Chunks::default())
+            .with_budget(100)
+            .with_limits(&limits);
+        out.write_str("abc").unwrap();
+        let err = out.write_str("xyz").unwrap_err();
+        assert_eq!(err.code, Code::ResourceLimitExceeded);
+        assert!(!err.committed_output);
+        assert_eq!(out.committed(), 0);
+        let w = out.into_inner();
+        assert!(w.chunks.is_empty(), "no committed output means none: {w:?}");
+        assert_eq!(w.flushes, 0);
+    }
+
+    #[test]
+    fn a_caller_that_wants_the_partial_output_flushes_before_into_inner() {
+        let mut out = WriteOut::new(Chunks::default()).with_budget(100);
+        out.write_str("abc").unwrap();
+        out.flush().unwrap();
+        let w = out.into_inner();
+        assert_eq!(joined(&w.chunks), "abc");
+        assert_eq!(w.flushes, 1);
     }
 
     #[test]
@@ -516,7 +551,7 @@ mod tests {
         let err = out.write_str("abcd").unwrap_err();
         assert_eq!(err.code, Code::ResourceLimitExceeded);
         assert!(!err.committed_output);
-        assert_eq!(out.into_inner().unwrap().chunks, Vec::<Vec<u8>>::new());
+        assert_eq!(out.into_inner().chunks, Vec::<Vec<u8>>::new());
     }
 
     #[test]
@@ -555,7 +590,7 @@ mod tests {
         assert_eq!(Metrics::get(&metrics.output_bytes), 0);
         out.flush().unwrap();
         assert_eq!(Metrics::get(&metrics.output_bytes), 12);
-        assert_eq!(out.into_inner().unwrap(), b"twelve bytes");
+        assert_eq!(out.into_inner(), b"twelve bytes");
     }
 
     #[test]
@@ -714,7 +749,7 @@ mod tests {
         j.write_str("a-b").unwrap();
         j.write_str("c-").unwrap();
         j.flush().unwrap();
-        let bytes = j.into_inner().into_inner().into_inner().unwrap();
+        let bytes = j.into_inner().into_inner().into_inner();
         assert_eq!(String::from_utf8(bytes).unwrap(), "a+b;c+");
     }
 }

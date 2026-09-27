@@ -25,8 +25,11 @@ BEFORE the fragment is accepted, so the failing fragment is never written
 writer. A writer error is `OUTPUT_FAILED`; the buffer is not retried.
 `committed()` is the bytes the writer received, `accepted()` the bytes
 taken in; a failure after any byte was committed carries
-`committed_output`. `into_inner()` flushes and hands the writer back, or
-fails with the flush's error.
+`committed_output`. `into_inner()` hands the writer back WITHOUT flushing:
+what was buffered and never flushed is dropped, so the writer holds
+exactly the bytes `committed()` counts, and a document that failed before
+its `End` does not reach the writer on the way out. A caller that wants
+the partial output anyway calls `flush()` first.
 
 `StringOut`: keeps the text (`as_str`, `into_string`); for tests and small
 results.
@@ -151,8 +154,13 @@ have rendered them.
 - `WriteOut` counts `output_bytes` when bytes reach the writer, not when
   they are accepted, so the metric means what its name says after a
   failure; `accepted()` is the other number.
-- `into_inner` on `WriteOut` flushes first and returns `Result`, so
-  unflushed bytes are never dropped silently.
+- `into_inner` on `WriteOut` does not flush. The alternative, flushing on
+  the way out, made `committed_output: false` untrue for every host that
+  takes its file or standard output back after a failure: the bytes a
+  failed document had buffered reached the writer after the failure had
+  been reported as `output: "none"`. Dropping them is the only teardown
+  that keeps the flag honest; `flush()` is explicit for anyone who wants
+  the partial output.
 - `Join`: a fragment outside an item is an item; unbalanced markers are
   protocol errors rather than panics.
 - `ReplaceText`: an empty literal is the identity; `flush` is a boundary.

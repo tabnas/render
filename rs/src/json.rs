@@ -571,6 +571,6 @@ mod tests {
         r.event(End).unwrap();
         assert!(r.is_done());
         assert_eq!(r.out.committed(), 6);
-        assert_eq!(r.into_inner().into_inner().unwrap(), b"[true]");
+        assert_eq!(r.into_inner().into_inner(), b"[true]");
     }
 }

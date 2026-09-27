@@ -760,7 +760,7 @@ mod tests {
         assert_eq!(r.table_event(TableEvent::End).unwrap(), Flow::Continue);
         assert_eq!(r.rows(), 1);
         assert_eq!(r.out.committed(), 10);
-        let bytes = r.into_inner().into_inner().unwrap();
+        let bytes = r.into_inner().into_inner();
         assert_eq!(bytes, b"\"a\"\r\n\"x\"\r\n");
     }
 }
