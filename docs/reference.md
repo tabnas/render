@@ -234,14 +234,29 @@ not done.
 
 ## Measured
 
-`cargo bench` (`rs/benches/render.rs`), one core of the development
-container, 2026-09-27, 20 000 synthetic rows of five columns:
+`cargo bench` (`rs/benches/render.rs`), release build, one core of the
+development container (a shared 2.1 GHz Xeon vCPU), 2026-09-27, criterion's
+mean. The end-to-end groups run the spec's worked-example document of
+20 000 records (1.66 MB of JSON); the renderer-only groups run 20 000
+synthetic rows of five columns.
 
-| Group | Throughput |
-|---|---|
-| `csv_render_rows` (table events → CSV over a discarding writer) | about 4.3 M rows/s |
-| `csv_render_bytes` (the same, in output bytes) | about 290 MiB/s |
-| `json_render` (parsed 20k-record document → `ValueSource` → compact JSON) | about 78 MiB/s of source |
+| Group | What runs | Throughput |
+|---|---|---|
+| `json_to_csv/text_to_csv_incremental` | **end to end**: JSON text → `ParserSource` (incremental, pruned) → `TableFromJson` → `CsvRenderer` → `WriteOut` | 1.37 s; about 1.15 MiB/s of JSON in, 0.57 MiB/s of CSV out |
+| `json_to_csv/parsed_value_to_csv` | the same chain from the parsed value: `ValueSource` → `TableFromJson` → `CsvRenderer` → `WriteOut` | 76 ms; about 21 MiB/s of source |
+| `json_render` | renderer only, no parse: parsed value → `ValueSource` → `JsonRenderer` → `WriteOut` | 39 ms; about 40 MiB/s of source |
+| `csv_render_rows` | renderer only: pre-built cells → `CsvRenderer` → discarding `WriteOut` | about 4.5 M rows/s |
+| `csv_render_bytes` | the same, in output bytes | about 318 MiB/s of CSV |
 
-The renderers are not the bottleneck of an export: the engine parses at
-about 1 MB/s (transduce's `docs/BENCH.md`). Re-measure before quoting.
+What the table says: JSON to CSV end to end runs at the engine's speed,
+about 1.2 MiB/s here as in transduce's `table_from_text` group, and the
+stages this crate adds cost about 5% of that (76 ms of 1.37 s, the table
+transducer included). The renderers alone are two orders of magnitude
+faster than the parse and are not where an export's time goes.
+
+The numbers move with the container: the same original code measured
+78 MiB/s on `json_render` earlier on 2026-09-27 and 34 MiB/s later the
+same day, so a comparison is only sound between runs made together.
+Re-measure before quoting; the renderer-only numbers answer what the
+renderer costs, and only `json_to_csv` answers the brief's throughput
+target.

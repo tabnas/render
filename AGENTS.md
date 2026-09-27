@@ -74,7 +74,7 @@ standard transducer to be the only one.
 | `rs/src/number.rs` | the JSON number grammar both renderers hold lexemes to; the non-finite check; the shortest text of a lexeme-less value |
 | `rs/tests/csv_readback.rs` | rendered CSV read back with the `csv` crate |
 | `rs/tests/json_readback.rs` | rendered JSON read back with serde_json, for every fixture in `rs/tests/fixtures/` (copied from aless) |
-| `rs/benches/render.rs` | table events → CSV (rows/s, bytes/s); parsed document → `ValueSource` → JSON |
+| `rs/benches/render.rs` | end to end: JSON text → `ParserSource` → `TableFromJson` → `CsvRenderer` (the brief's JSON→CSV throughput), and the same chain from a parsed value; renderer only: table events → CSV (rows/s, bytes/s), parsed value → `ValueSource` → JSON |
 | `docs/reference.md` | options, contracts, codes raised, decisions taken, measurements |
 | `ci/rust/run.sh` | the gate `.github/workflows/rust.yml` runs |
 
@@ -102,7 +102,9 @@ JSON with `serde_json`; a renderer change that the oracle disagrees with
 is a defect, whatever the bytes look like. `cargo bench` (or `make bench`)
 runs `rs/benches/render.rs`, which prints a line per group; the numbers
 are recorded in `docs/reference.md` and belong beside the engine's in
-transduce's `docs/BENCH.md` when quoted.
+transduce's `docs/BENCH.md` when quoted. Only the `json_to_csv` group
+answers the brief's JSON→CSV throughput target; the other groups measure
+a renderer on its own, and say so in their names and output.
 
 ## Error codes
 

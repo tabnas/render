@@ -3,18 +3,34 @@
 //! silent, and the numbers belong next to the engine's in transduce's
 //! `docs/BENCH.md` when they are quoted.
 //!
-//! Two questions: how fast does the CSV renderer turn table events into
-//! bytes when nothing upstream slows it (rows per second and bytes per
-//! second, over a discarding writer), and how fast does a parsed document
-//! flow through the whole-value walker into the JSON renderer.
+//! Two kinds of question. RENDERER ONLY: how fast does the CSV renderer
+//! turn table events into bytes when nothing upstream slows it
+//! (`csv_render_rows`, `csv_render_bytes`: pre-built cells over a
+//! discarding writer), and how fast does an already parsed document flow
+//! through the whole-value walker into the JSON renderer (`json_render`).
+//! END TO END: how fast does JSON text become CSV through the chain the
+//! design brief assigns to this crate, parser to rule events to
+//! `TableFromJson` to `CsvRenderer` to `WriteOut` (`json_to_csv`), which
+//! is the number the brief's sixth target asks for; the same chain from the
+//! parsed value separates the parse from the stages after it.
 
 use std::io;
 
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 use tabnas_render::{CsvOptions, CsvRenderer, JsonOptions, JsonRenderer, TextOut, WriteOut};
-use tabnas_transduce::{Cell, PublicColumn, Source, TableEvent, TableSink, ValueSource};
+use tabnas_transduce::{
+    column_from_meta, Cell, Duplicates, Limits, Metrics, ParserSource, Prune, PublicColumn, Schema,
+    Selector, Source, SourceMode, TableBinding, TableEvent, TableFromJson, TableSink, ValueSource,
+};
 
-const ROWS: usize = 20_000;
+/// 20k records in a release measurement; under `cargo test` (a debug build
+/// running each bench once) a tenth of that keeps the gate quick, since the
+/// engine parses at a fraction of its release speed there.
+const ROWS: usize = if cfg!(debug_assertions) {
+    2_000
+} else {
+    20_000
+};
 
 fn columns() -> Vec<PublicColumn> {
     ["id", "name", "balance", "active", "note"]
@@ -68,7 +84,9 @@ fn csv_render(c: &mut Criterion) {
     let columns = columns();
     let rows = synthetic_rows(ROWS);
     let bytes = render_csv(WriteOut::new(io::sink()), &columns, &rows).committed();
-    println!("bench csv_render: {ROWS} rows, {bytes} bytes of CSV per iteration");
+    println!(
+        "bench csv_render (renderer only): {ROWS} pre-built rows, {bytes} bytes of CSV per iteration"
+    );
 
     let mut group = c.benchmark_group("csv_render_rows");
     group.throughput(Throughput::Elements(ROWS as u64));
@@ -77,7 +95,7 @@ fn csv_render(c: &mut Criterion) {
     });
     group.finish();
 
-    println!("bench csv_render: the same table, measured in bytes");
+    println!("bench csv_render (renderer only): the same table, measured in bytes");
     let mut group = c.benchmark_group("csv_render_bytes");
     group.throughput(Throughput::Bytes(bytes));
     group.bench_function("bytes_per_second", |b| {
@@ -86,7 +104,9 @@ fn csv_render(c: &mut Criterion) {
     group.finish();
 }
 
-/// The spec's worked example shape, `records` records long.
+/// The spec's worked example shape, `records` records long: three columns
+/// declared by path under `response.metadata.fields`, the records under
+/// `response.payload.deep.records`.
 fn records_json(records: usize) -> String {
     let mut s = String::from(
         r#"{"response":{"metadata":{"fields":[{"title":"Identifier","path":["id"]},{"title":"Full name","path":["person","name"]},{"title":"Balance","path":["account","balance"]}]},"payload":{"deep":{"records":["#,
@@ -108,7 +128,7 @@ fn records_json(records: usize) -> String {
 fn json_render(c: &mut Criterion) {
     let src = records_json(ROWS);
     println!(
-        "bench json_render: parsing {ROWS} records ({} bytes) once",
+        "bench json_render (walk and renderer, no parse): parsing {ROWS} records ({} bytes) once",
         src.len()
     );
     let value = tabnas_json::parse(&src).expect("the generated document parses");
@@ -127,5 +147,93 @@ fn json_render(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, csv_render, json_render);
+/// Where the worked example's records are.
+fn records_selector() -> Selector {
+    Selector::root()
+        .property("response")
+        .property("payload")
+        .property("deep")
+        .property("records")
+        .each_index()
+}
+
+/// The spec's `api-binding`: columns from the document's metadata, rows
+/// from the records.
+fn binding() -> TableBinding {
+    TableBinding {
+        schema: Schema::FromMetadata {
+            columns: Selector::root()
+                .property("response")
+                .property("metadata")
+                .property("fields"),
+            column: Box::new(column_from_meta),
+        },
+        rows: records_selector(),
+    }
+}
+
+/// The stages after the source: the table transducer over the CSV renderer
+/// over a coalescing writer that discards, so the chain is measured and the
+/// disk is not.
+fn csv_chain() -> TableFromJson<CsvRenderer<WriteOut<io::Sink>>> {
+    let csv = CsvRenderer::new(WriteOut::new(io::sink()), CsvOptions::default())
+        .expect("the default delimiter is valid");
+    TableFromJson::new(
+        binding(),
+        &Limits::default(),
+        Duplicates::LastWins,
+        Metrics::new(),
+        csv,
+    )
+    .expect("the worked-example binding is valid")
+}
+
+/// The incremental source over the JSON grammar, pruning each streamed
+/// record from the tree as aless runs it.
+fn incremental(src: &str) -> ParserSource<'_> {
+    ParserSource::new(tabnas_json::make(), src).mode(SourceMode::Incremental {
+        prune: Prune::Under(records_selector()),
+    })
+}
+
+fn json_to_csv(c: &mut Criterion) {
+    let src = records_json(ROWS);
+    // Once outside the measurement: the chain ends, every record is a row,
+    // and the output size is known.
+    let (outcome, table) = incremental(&src).run_owned(csv_chain());
+    outcome.expect("the chain runs");
+    let csv = table.into_inner();
+    let rows = csv.rows();
+    let bytes = csv.into_inner().committed();
+    assert_eq!(rows, ROWS as u64, "every record is a row");
+    println!(
+        "bench json_to_csv (end to end): {ROWS} records, {} bytes of JSON in, {bytes} bytes of CSV out per iteration",
+        src.len()
+    );
+    let mut group = c.benchmark_group("json_to_csv");
+    group.sample_size(10);
+    group.throughput(Throughput::Bytes(src.len() as u64));
+    group.bench_function("text_to_csv_incremental", |b| {
+        b.iter(|| {
+            let (outcome, table) = incremental(&src).run_owned(csv_chain());
+            outcome.expect("the chain runs");
+            table.into_inner().into_inner().committed()
+        })
+    });
+
+    println!(
+        "bench json_to_csv: the same chain from the parsed value (the stages after the parse)"
+    );
+    let value = tabnas_json::parse(&src).expect("the generated document parses");
+    group.bench_function("parsed_value_to_csv", |b| {
+        b.iter(|| {
+            let mut table = csv_chain();
+            ValueSource(&value).run(&mut table).expect("the chain runs");
+            table.into_inner().into_inner().committed()
+        })
+    });
+    group.finish();
+}
+
+criterion_group!(benches, csv_render, json_render, json_to_csv);
 criterion_main!(benches);
