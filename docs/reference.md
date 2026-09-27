@@ -8,11 +8,17 @@ a `tabnas_transduce::Code`, written as the code is (`PROTOCOL_ORDER_ERROR`).
 
 ## Text outputs (`rs/src/text.rs`)
 
-`TextOut`: `write_str(&str) -> Result<(), Fail>` and
-`flush() -> Result<(), Fail>`. Fragments are concatenated; where they are
-cut carries no meaning. A renderer flushes exactly once, at the end of the
-protocol it renders, so a document that failed half way is not flushed as
-if it were whole. `&mut O` and `Box<O>` are outputs when `O` is.
+`TextOut`: `write_str(&str) -> Result<(), Fail>`,
+`flush() -> Result<(), Fail>` and `has_committed() -> bool`. Fragments are
+concatenated; where they are cut carries no meaning. A renderer flushes
+exactly once, at the end of the protocol it renders, so a document that
+failed half way is not flushed as if it were whole. `has_committed` says
+whether any text has reached the final destination; a renderer that fails
+reports `committed_output` from it. The default answer is `true`, the
+conservative one for an output that cannot tell; `WriteOut` answers from
+the bytes its writer received, `StringOut` from whether it holds text,
+`Join` and `ReplaceText` ask the output beneath. `&mut O` and `Box<O>`
+are outputs when `O` is.
 
 `WriteOut<W: io::Write>`: coalesces fragments into a buffer of at most
 `budget` bytes (`DEFAULT_BUDGET`, 32 KiB; `with_budget`). A fragment that
@@ -168,9 +174,14 @@ lexeme-less number costs no allocation.
 `PROTOCOL_ORDER_ERROR`, `TARGET_VALUE_UNREPRESENTABLE`, `INVALID_NUMBER`,
 `MISSING_VALUE`, `RESOURCE_LIMIT_EXCEEDED` (`max_output_bytes`),
 `OUTPUT_FAILED`. A `Fail` from a renderer carries `committed_output` when
-the renderer had written any text before the failure; `RecordsToJson`
-sets it when it had forwarded any event, since the stage downstream may
-have rendered them.
+text the renderer wrote had reached the output's destination
+(`TextOut::has_committed`): over a `WriteOut`, bytes the writer received,
+not bytes still buffered, so the flag agrees with what `into_inner` hands
+back. `RecordsToJson` sets it when it had forwarded any event, since the
+stage downstream may have rendered them. A renderer's `is_done()` is true
+only once `End` has been rendered AND flushed (or, for `RecordsToJson`,
+forwarded and accepted); an `End` whose flush failed leaves the renderer
+not done.
 
 ## Decisions where the design brief was silent
 

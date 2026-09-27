@@ -27,6 +27,19 @@ use tabnas_transduce::{Fail, Limits, Metrics};
 pub trait TextOut {
     fn write_str(&mut self, s: &str) -> Result<(), Fail>;
     fn flush(&mut self) -> Result<(), Fail>;
+
+    /// Whether any text has reached the final destination, so that a
+    /// failure found now leaves partial output behind. A renderer asks this
+    /// when it fails and reports `committed_output` from the answer, which
+    /// is how a host knows to print `output: "partial"` rather than
+    /// `"none"`. The default is the conservative answer for an output that
+    /// cannot tell: whatever the renderer handed over may be out.
+    /// [`WriteOut`] answers exactly, from the bytes its writer received; a
+    /// fragment that is still buffered is not committed, and `into_inner`
+    /// drops it rather than sending it after the fact.
+    fn has_committed(&self) -> bool {
+        true
+    }
 }
 
 impl<O: TextOut + ?Sized> TextOut for &mut O {
@@ -37,6 +50,10 @@ impl<O: TextOut + ?Sized> TextOut for &mut O {
     fn flush(&mut self) -> Result<(), Fail> {
         (**self).flush()
     }
+
+    fn has_committed(&self) -> bool {
+        (**self).has_committed()
+    }
 }
 
 impl<O: TextOut + ?Sized> TextOut for Box<O> {
@@ -46,6 +63,10 @@ impl<O: TextOut + ?Sized> TextOut for Box<O> {
 
     fn flush(&mut self) -> Result<(), Fail> {
         (**self).flush()
+    }
+
+    fn has_committed(&self) -> bool {
+        (**self).has_committed()
     }
 }
 
@@ -202,6 +223,10 @@ impl<W: io::Write> TextOut for WriteOut<W> {
         self.drain()?;
         self.writer.flush().map_err(|e| self.fail_io(e))
     }
+
+    fn has_committed(&self) -> bool {
+        self.committed > 0
+    }
 }
 
 /// A [`TextOut`] that keeps the text, for tests and small results.
@@ -230,6 +255,12 @@ impl TextOut for StringOut {
 
     fn flush(&mut self) -> Result<(), Fail> {
         Ok(())
+    }
+
+    /// The string is the destination, so its text is committed as soon as
+    /// it is there.
+    fn has_committed(&self) -> bool {
+        !self.0.is_empty()
     }
 }
 
@@ -310,6 +341,10 @@ impl<O: TextOut> TextOut for Join<O> {
     /// is about transport and an item is about meaning.
     fn flush(&mut self) -> Result<(), Fail> {
         self.out.flush()
+    }
+
+    fn has_committed(&self) -> bool {
+        self.out.has_committed()
     }
 }
 
@@ -411,6 +446,11 @@ impl<O: TextOut> TextOut for ReplaceText<O> {
             self.out.write_str(&pending)?;
         }
         self.out.flush()
+    }
+
+    /// The carry has not gone anywhere; only the output beneath knows.
+    fn has_committed(&self) -> bool {
+        self.out.has_committed()
     }
 }
 
@@ -591,6 +631,34 @@ mod tests {
         out.flush().unwrap();
         assert_eq!(Metrics::get(&metrics.output_bytes), 12);
         assert_eq!(out.into_inner(), b"twelve bytes");
+    }
+
+    #[test]
+    fn has_committed_is_answered_by_the_destination_not_the_buffer() {
+        let mut out = WriteOut::new(Chunks::default()).with_budget(100);
+        assert!(!out.has_committed());
+        out.write_str("abc").unwrap();
+        assert!(!out.has_committed(), "buffered is not committed");
+        out.flush().unwrap();
+        assert!(out.has_committed());
+
+        let mut s = StringOut::new();
+        assert!(!s.has_committed());
+        s.write_str("x").unwrap();
+        assert!(s.has_committed(), "the string is the destination");
+
+        // The combinators forward the question; a replacer's carry has
+        // gone nowhere yet.
+        let inner = WriteOut::new(Vec::new()).with_budget(100);
+        let mut r = ReplaceText::new(Join::new(inner, ","), "ab", "");
+        r.write_str("xa").unwrap();
+        assert!(!r.has_committed());
+        r.flush().unwrap();
+        assert!(r.has_committed());
+        let by_ref: &mut ReplaceText<_> = &mut r;
+        assert!(TextOut::has_committed(&by_ref));
+        let boxed: Box<dyn TextOut> = Box::new(r);
+        assert!(boxed.has_committed());
     }
 
     #[test]

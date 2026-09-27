@@ -201,11 +201,14 @@ impl<S: Sink> RecordsToJson<S> {
             Phase::BeforeSchema => return Err(Fail::protocol("the end before the schema")),
             Phase::Done => return Err(self.fail(Fail::protocol("a second end"))),
         }
-        self.phase = Phase::Done;
         if self.send(JsonEvent::ArrayEnd)? == Flow::Stop {
             return Ok(Flow::Stop);
         }
-        self.send(JsonEvent::End)
+        // Done only once `End` has been taken downstream: a sink that
+        // failed on it has not seen the document end.
+        let flow = self.send(JsonEvent::End)?;
+        self.phase = Phase::Done;
+        Ok(flow)
     }
 }
 
@@ -450,6 +453,23 @@ mod tests {
         }
         assert_eq!(r.rows(), 0);
         assert_eq!(r.into_inner(), vec![ArrayStart, ArrayEnd, End]);
+    }
+
+    #[test]
+    fn a_sink_that_fails_on_end_leaves_the_stage_not_done() {
+        let sink = FnSink(|ev: JsonEvent<'_>| {
+            if let JsonEvent::End = ev {
+                Err(Fail::output("closed"))
+            } else {
+                Ok(Flow::Continue)
+            }
+        });
+        let mut r = RecordsToJson::new(sink);
+        let columns = cols(&["a"]);
+        r.table_event(TableEvent::Schema(&columns)).unwrap();
+        let err = r.table_event(TableEvent::End).unwrap_err();
+        assert_eq!(err.code, Code::OutputFailed);
+        assert!(!r.is_done());
     }
 
     #[test]

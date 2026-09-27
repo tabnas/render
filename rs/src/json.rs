@@ -97,8 +97,11 @@ impl<O: TextOut> JsonRenderer<O> {
         self.out
     }
 
+    /// Mark a failure as leaving partial output when text this renderer
+    /// wrote has reached the destination; text still buffered in the
+    /// output has not, and the output knows which.
     fn fail(&self, f: Fail) -> Fail {
-        if self.emitted {
+        if self.emitted && self.out.has_committed() {
             f.committed()
         } else {
             f
@@ -321,8 +324,11 @@ impl<O: TextOut> JsonRenderer<O> {
         if self.options.trailing_newline {
             self.put("\n")?;
         }
+        // Ended only once the flush has succeeded: a document whose last
+        // bytes never reached the writer is not done, whatever `End` said.
+        self.out.flush()?;
         self.ended = true;
-        self.out.flush()
+        Ok(())
     }
 }
 
@@ -718,6 +724,46 @@ mod tests {
             Code::ProtocolOrderError
         );
         assert_eq!(r.into_inner().as_str(), "{\"a\":[null");
+    }
+
+    /// A writer that takes every byte and refuses to flush.
+    struct NoFlush;
+
+    impl std::io::Write for NoFlush {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Err(std::io::Error::other("pipe closed"))
+        }
+    }
+
+    #[test]
+    fn a_failed_flush_at_end_leaves_the_renderer_not_done() {
+        let mut r = JsonRenderer::new(WriteOut::new(NoFlush), JsonOptions::default());
+        r.event(Null).unwrap();
+        let err = r.event(End).unwrap_err();
+        assert_eq!(err.code, Code::OutputFailed);
+        assert!(!r.is_done());
+    }
+
+    #[test]
+    fn committed_output_means_bytes_that_reached_the_writer() {
+        let mut r = JsonRenderer::new(WriteOut::new(Vec::new()), JsonOptions::default());
+        r.event(ArrayStart).unwrap();
+        let err = r.event(Key("k")).unwrap_err();
+        assert_eq!(err.code, Code::ProtocolOrderError);
+        assert!(!err.committed_output, "the bracket is only buffered");
+        assert_eq!(r.out.committed(), 0);
+
+        let mut r = JsonRenderer::new(
+            WriteOut::new(Vec::new()).with_budget(0),
+            JsonOptions::default(),
+        );
+        r.event(ArrayStart).unwrap();
+        let err = r.event(Key("k")).unwrap_err();
+        assert!(err.committed_output, "the bracket reached the writer");
     }
 
     #[test]
