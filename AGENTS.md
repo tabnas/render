@@ -48,12 +48,16 @@ fixed literal, carrying the bounded suffix that a match across chunk
 boundaries needs. The **CSV renderer** ([`csv.rs`](rs/src/csv.rs)) is the
 spec's always-quoted profile: every field quoted, `"` doubled, CRLF by
 default, one schema, rows of the schema's width, one end, zero columns
-rejected, number lexemes validated, `Missing` an error unless a
+rejected, number lexemes validated against the JSON grammar
+([`number.rs`](rs/src/number.rs)), `Missing` an error unless a
 replacement text is configured. The **JSON renderer**
 ([`json.rs`](rs/src/json.rs)) writes `JsonEvents/1` as compact (or
 fixed-indent) JSON with RFC 8259 escaping, lexemes kept, NaN and infinity
-rejected, exactly one root. `RecordsToJson` turns `TableRows/1` into an
-array of objects keyed by label.
+rejected, exactly one root. `RecordsToJson`
+([`records.rs`](rs/src/records.rs)) turns `TableRows/1` into an array of
+objects keyed by label, one object per row, retaining only the labels.
+Every renderer flushes once, at its protocol's end, and a failure found
+after text was written carries `committed_output`.
 
 Renderers validate their protocol as they go, because third-party
 transducers and host adapters are also sources; they do not trust the
@@ -63,13 +67,22 @@ standard transducer to be the only one.
 
 | Path | What it is |
 |---|---|
-| `rs/src/text.rs` | `TextOut`, `WriteOut` (coalescing), `Join`, `ReplaceText` |
+| `rs/src/text.rs` | `TextOut`, `WriteOut` (coalescing, the output limit, `output_bytes`), `StringOut`, `Join`, `ReplaceText` |
 | `rs/src/csv.rs` | `CsvOptions`, `CsvRenderer` (a `TableSink`) |
 | `rs/src/json.rs` | `JsonOptions`, `JsonRenderer` (a `Sink`) |
-| `rs/src/records.rs` | `RecordsToJson` (`TableRows/1` → `JsonEvents/1`) |
-| `rs/tests/` | format tests read back with independent parsers; chunk-boundary tests |
-| `rs/benches/render.rs` | JSON in, CSV out, end to end |
+| `rs/src/records.rs` | `RecordsToJson` (`TableRows/1` → `JsonEvents/1`), `MissingRecord` |
+| `rs/src/number.rs` | the JSON number grammar both renderers hold lexemes to |
+| `rs/tests/csv_readback.rs` | rendered CSV read back with the `csv` crate |
+| `rs/tests/json_readback.rs` | rendered JSON read back with serde_json, for every fixture in `rs/tests/fixtures/` (copied from aless) |
+| `rs/benches/render.rs` | table events → CSV (rows/s, bytes/s); parsed document → `ValueSource` → JSON |
+| `docs/reference.md` | options, contracts, codes raised, decisions taken, measurements |
 | `ci/rust/run.sh` | the gate `.github/workflows/rust.yml` runs |
+
+Chunk-boundary tests (coalescing at the budget, the limit failing before
+the write, joins with empty items, replacements split at every byte of the
+literal) live beside the code in `rs/src/text.rs`; every Appendix A CSV
+case asserts exact bytes in `rs/src/csv.rs`; every JSON protocol error is
+in `rs/src/json.rs`.
 
 ## Verify your work
 
@@ -86,7 +99,10 @@ cargo clippy --all-targets --all-features -- -D warnings
 `ci/rust/run.sh` runs exactly that and needs the sibling checkouts its
 header lists. Rendered CSV is read back with the `csv` crate and rendered
 JSON with `serde_json`; a renderer change that the oracle disagrees with
-is a defect, whatever the bytes look like.
+is a defect, whatever the bytes look like. `cargo bench` (or `make bench`)
+runs `rs/benches/render.rs`, which prints a line per group; the numbers
+are recorded in `docs/reference.md` and belong beside the engine's in
+transduce's `docs/BENCH.md` when quoted.
 
 ## Error codes
 
