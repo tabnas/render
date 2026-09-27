@@ -17,7 +17,7 @@
 
 use tabnas_transduce::{write_json_string, Fail, Flow, JsonEvent, Number, Sink};
 
-use crate::number::number_text;
+use crate::number::{check_number, write_value};
 use crate::text::TextOut;
 
 /// The JSON profile.
@@ -44,10 +44,12 @@ enum Frame {
 /// is due, a value where a key is due, an unbalanced or mismatched close,
 /// and any event after `End` are `PROTOCOL_ORDER_ERROR`. Numbers write
 /// their lexeme when it is a JSON number (`INVALID_NUMBER` otherwise) and
-/// the shortest round-trip form of the value when there is none; NaN and
-/// infinity have no JSON form and are `TARGET_VALUE_UNREPRESENTABLE`. The
-/// output is flushed once, at `End`; a failure found after any text was
-/// written says so with `committed_output`.
+/// the shortest text that reads back as the value when there is none; NaN
+/// and infinity have no JSON form and are `TARGET_VALUE_UNREPRESENTABLE`,
+/// whatever lexeme stands beside them. A number is checked before its
+/// separator is written, so a rejected value leaves no trace. The output
+/// is flushed once, at `End`; a failure found after any text was written
+/// says so with `committed_output`.
 pub struct JsonRenderer<O: TextOut> {
     out: O,
     options: JsonOptions,
@@ -122,14 +124,16 @@ impl<O: TextOut> JsonRenderer<O> {
         r
     }
 
+    /// Write a number that [`check_number`] has passed: the lexeme as it
+    /// is, or the value formatted once into the reused scratch buffer.
     fn put_number(&mut self, n: Number<'_>) -> Result<(), Fail> {
-        let mut scratch = std::mem::take(&mut self.scratch);
-        let r = match number_text(n.value, n.lexeme, &mut scratch) {
-            Ok(text) => self.put(text),
-            Err(f) => Err(self.fail(f)),
-        };
-        self.scratch = scratch;
-        r
+        match n.lexeme {
+            Some(l) => self.put(l),
+            None => {
+                self.emitted = true;
+                self.out.write_str(write_value(n.value, &mut self.scratch))
+            }
+        }
     }
 
     /// A line break and the indentation of `depth` levels; nothing when
@@ -266,6 +270,12 @@ impl<O: TextOut> JsonRenderer<O> {
     }
 
     fn scalar(&mut self, ev: JsonEvent<'_>) -> Result<(), Fail> {
+        // Before the separator: a number that will be refused must leave
+        // nothing behind, or a caller that carries on after the failure
+        // would find `[1,,2]` in the output.
+        if let JsonEvent::Number(n) = ev {
+            check_number(n.value, n.lexeme).map_err(|f| self.fail(f))?;
+        }
         self.begin_value()?;
         match ev {
             JsonEvent::Null => self.put("null")?,
@@ -469,7 +479,20 @@ mod tests {
         ];
         assert_eq!(
             compact(&events).unwrap(),
-            "[1.00,123456789012345678901234567890,-0,1E+2,0,1000000000000000000000,0.1,-2]"
+            "[1.00,123456789012345678901234567890,-0,1E+2,0,1e21,0.1,-2]"
+        );
+        assert_eq!(
+            compact(&[
+                ArrayStart,
+                value(1e300),
+                value(1e-300),
+                value(1.5e17),
+                value(1e20),
+                ArrayEnd,
+                End
+            ])
+            .unwrap(),
+            "[1e300,1e-300,150000000000000000,100000000000000000000]"
         );
     }
 
@@ -490,6 +513,47 @@ mod tests {
             let err = compact(&[value(v), End]).unwrap_err();
             assert_eq!(err.code, Code::TargetValueUnrepresentable);
         }
+    }
+
+    #[test]
+    fn an_overflowed_lexeme_is_unrepresentable_too() {
+        // "1e999" is a JSON number by grammar, but the value beside it is
+        // infinity and a reader of the text would refuse it; the crate's
+        // own oracle (serde_json) does. Nothing is written for it.
+        let overflowed = Number(tabnas_transduce::Number::with_lexeme(
+            f64::INFINITY,
+            "1e999",
+        ));
+        let mut r = JsonRenderer::new(StringOut::new(), JsonOptions::default());
+        r.event(ArrayStart).unwrap();
+        r.event(num("1")).unwrap();
+        let err = r.event(overflowed).unwrap_err();
+        assert_eq!(err.code, Code::TargetValueUnrepresentable);
+        assert!(err.committed_output);
+        assert_eq!(r.out.as_str(), "[1");
+        let err = compact(&[overflowed, End]).unwrap_err();
+        assert_eq!(err.code, Code::TargetValueUnrepresentable);
+        assert!(!err.committed_output);
+    }
+
+    #[test]
+    fn a_rejected_number_leaves_no_separator_behind() {
+        let mut r = JsonRenderer::new(StringOut::new(), JsonOptions::default());
+        for ev in [ArrayStart, num("1")] {
+            r.event(ev).unwrap();
+        }
+        assert_eq!(r.event(num("01")).unwrap_err().code, Code::InvalidNumber);
+        assert_eq!(r.out.as_str(), "[1");
+        assert_eq!(
+            r.event(value(f64::NAN)).unwrap_err().code,
+            Code::TargetValueUnrepresentable
+        );
+        assert_eq!(r.out.as_str(), "[1");
+        // A caller that carries on regardless still gets a document.
+        for ev in [value(2.0), ArrayEnd, End] {
+            r.event(ev).unwrap();
+        }
+        assert_eq!(r.into_inner().as_str(), "[1,2]");
     }
 
     fn protocol_error(events: &[JsonEvent<'_>]) -> Fail {

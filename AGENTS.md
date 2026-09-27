@@ -71,7 +71,7 @@ standard transducer to be the only one.
 | `rs/src/csv.rs` | `CsvOptions`, `CsvRenderer` (a `TableSink`) |
 | `rs/src/json.rs` | `JsonOptions`, `JsonRenderer` (a `Sink`) |
 | `rs/src/records.rs` | `RecordsToJson` (`TableRows/1` → `JsonEvents/1`), `MissingRecord` |
-| `rs/src/number.rs` | the JSON number grammar both renderers hold lexemes to |
+| `rs/src/number.rs` | the JSON number grammar both renderers hold lexemes to; the non-finite check; the shortest text of a lexeme-less value |
 | `rs/tests/csv_readback.rs` | rendered CSV read back with the `csv` crate |
 | `rs/tests/json_readback.rs` | rendered JSON read back with serde_json, for every fixture in `rs/tests/fixtures/` (copied from aless) |
 | `rs/benches/render.rs` | table events → CSV (rows/s, bytes/s); parsed document → `ValueSource` → JSON |
@@ -111,7 +111,8 @@ shared set; see transduce's AGENTS.md for the table. The ones raised here:
 `PROTOCOL_ORDER_ERROR` (a row before the schema, two schemas, a row of the
 wrong width, a missing or repeated end, JSON events out of sequence),
 `TARGET_VALUE_UNREPRESENTABLE` (a table with no columns for CSV; NaN or
-infinity for JSON; a bad delimiter), `INVALID_NUMBER` (a lexeme that is not
+infinity in either renderer, whatever lexeme stands beside the value; a
+bad delimiter), `INVALID_NUMBER` (a lexeme that is not
 a JSON number), `MISSING_VALUE` (a `Missing` cell with no replacement
 configured), `RESOURCE_LIMIT_EXCEEDED` (`max_output_bytes`),
 `OUTPUT_FAILED` (the writer failed). The code is the contract; the message

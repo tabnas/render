@@ -16,7 +16,7 @@
 
 use tabnas_transduce::{Cell, Code, Fail, Flow, PublicColumn, TableEvent, TableSink};
 
-use crate::number::number_text;
+use crate::number::{check_number, write_value};
 use crate::text::TextOut;
 
 /// The record terminator.
@@ -224,14 +224,12 @@ impl<O: TextOut> CsvRenderer<O> {
                 Cell::Null => &self.options.null_text,
                 Cell::Bool(true) => "true",
                 Cell::Bool(false) => "false",
-                Cell::Number { value, lexeme } => {
-                    // Validated by `check`; this pass only formats.
-                    let emitted = self.emitted;
-                    match number_text(*value, lexeme.as_deref(), &mut self.scratch) {
-                        Ok(text) => text,
-                        Err(f) => return Err(if emitted { f.committed() } else { f }),
-                    }
-                }
+                // `check` passed the row: the lexeme is a JSON number and the
+                // value is finite, so this pass only formats, once.
+                Cell::Number {
+                    lexeme: Some(l), ..
+                } => l,
+                Cell::Number { value, .. } => write_value(*value, &mut self.scratch),
                 Cell::String(s) => s,
                 Cell::Missing => match &self.options.missing {
                     MissingText::Text(t) => t,
@@ -255,20 +253,19 @@ impl<O: TextOut> CsvRenderer<O> {
 
     /// Reject a row before any of it is written, so a row is rendered whole
     /// or not at all and the output stays a sequence of complete records
-    /// whatever the caller does after a failure.
-    fn check(&mut self, cells: &[Cell]) -> Result<(), Fail> {
+    /// whatever the caller does after a failure. Nothing is formatted here;
+    /// `row` formats each number once, after the row has passed.
+    fn check(&self, cells: &[Cell]) -> Result<(), Fail> {
         for (i, cell) in cells.iter().enumerate() {
             match cell {
                 Cell::Number { value, lexeme } => {
-                    number_text(*value, lexeme.as_deref(), &mut self.scratch)
-                        .map(|_| ())
-                        .map_err(|f| {
-                            f.at_path(format!(
-                                "column {:?}, row {}",
-                                self.labels[i],
-                                self.rows + 1
-                            ))
-                        })?;
+                    check_number(*value, lexeme.as_deref()).map_err(|f| {
+                        f.at_path(format!(
+                            "column {:?}, row {}",
+                            self.labels[i],
+                            self.rows + 1
+                        ))
+                    })?;
                 }
                 Cell::Missing if self.options.missing == MissingText::Error => {
                     return Err(Fail::new(
@@ -446,13 +443,21 @@ mod tests {
                 lexeme: None,
             },
             Cell::Number {
+                value: 1e20,
+                lexeme: None,
+            },
+            Cell::Number {
                 value: 1e21,
+                lexeme: None,
+            },
+            Cell::Number {
+                value: 1e-300,
                 lexeme: None,
             },
         ];
         assert_eq!(
-            standard(&["z", "b", "big"], &[row]),
-            "\"z\",\"b\",\"big\"\r\n\"0\",\"50.25\",\"1000000000000000000000\"\r\n"
+            standard(&["z", "b", "big", "bigger", "tiny"], &[row]),
+            "\"z\",\"b\",\"big\",\"bigger\",\"tiny\"\r\n\"0\",\"50.25\",\"100000000000000000000\",\"1e21\",\"1e-300\"\r\n"
         );
     }
 
@@ -480,7 +485,7 @@ mod tests {
     }
 
     #[test]
-    fn nan_and_infinity_without_a_lexeme_are_unrepresentable() {
+    fn nan_and_infinity_are_unrepresentable_with_or_without_a_lexeme() {
         for v in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
             let row = vec![Cell::Number {
                 value: v,
@@ -489,6 +494,22 @@ mod tests {
             let err = render(CsvOptions::default(), &["a"], &[row]).unwrap_err();
             assert_eq!(err.code, Code::TargetValueUnrepresentable);
         }
+        // The lexeme spells a number, but the value beside it overflowed:
+        // the row is refused whole and nothing of it is written.
+        let mut r = CsvRenderer::new(StringOut::new(), CsvOptions::default()).unwrap();
+        let columns = cols(&["a", "b"]);
+        r.table_event(TableEvent::Schema(&columns)).unwrap();
+        let row = [
+            s("x"),
+            Cell::Number {
+                value: f64::INFINITY,
+                lexeme: Some("1e999".into()),
+            },
+        ];
+        let err = r.table_event(TableEvent::Row(&row)).unwrap_err();
+        assert_eq!(err.code, Code::TargetValueUnrepresentable);
+        assert_eq!(err.path.as_deref(), Some("column \"b\", row 1"));
+        assert_eq!(r.into_inner().as_str(), "\"a\",\"b\"\r\n");
     }
 
     #[test]

@@ -74,12 +74,13 @@ implements `TableSink`:
   `Bool` writes `true` or `false`; `Null` writes `null_text`; `Number` with
   a lexeme writes it after checking it is a JSON number
   (`INVALID_NUMBER` otherwise), without one writes the shortest text that
-  reads back as the same f64, and NaN or infinity without a lexeme is
-  `TARGET_VALUE_UNREPRESENTABLE`; `Missing` is `MISSING_VALUE` unless
-  `missing` is a `Text`.
+  reads back as the same f64 (see Numbers below), and NaN or infinity is
+  `TARGET_VALUE_UNREPRESENTABLE` with or without a lexeme; `Missing` is
+  `MISSING_VALUE` unless `missing` is a `Text`.
 - A row is checked before any of it is written, so a row that fails
   (`MISSING_VALUE`, `INVALID_NUMBER`, a non-finite value) writes nothing
-  and the output stays a sequence of whole records.
+  and the output stays a sequence of whole records. The check formats
+  nothing; each number is formatted once, when the row is written.
 - `End` once, last; it flushes the output. Every record, the header and
   the last row included, ends with the newline.
 - A second schema, a row before the schema or after the end, a row of the
@@ -106,10 +107,11 @@ escaped by `tabnas_transduce::write_json_string`: `"`, `\`, `\b`, `\f`,
 `\n`, `\r`, `\t`, other control characters as `\u00XX`, everything else
 (non-ASCII included) as itself. Numbers follow the CSV rules above: a
 lexeme is validated (`INVALID_NUMBER`) and written, a value without one
-takes the shortest round-trip form, NaN and infinity are
-`TARGET_VALUE_UNREPRESENTABLE`. A lexeme is written even when the value
-beside it overflowed (`1e999`): the source spelled a number, and its range
-is the reader's business.
+takes the shortest form described under Numbers, and NaN and infinity are
+`TARGET_VALUE_UNREPRESENTABLE`, lexeme or not: `1e999` spells a number,
+but the value the pipeline holds is infinity and a JSON reader given the
+text refuses it as out of range (the crate's own oracle, serde_json,
+does). A number is checked before its separator is written.
 
 Exactly one root value, then `End`, which writes the trailing newline if
 configured and flushes. `PROTOCOL_ORDER_ERROR`: a second root value, an
@@ -117,8 +119,10 @@ end before the root or with a container open, a key outside an object, a
 key where a value is due, a value where a key is due, a close with no
 matching open (an object end inside an array, an end after a key with no
 value, any close at the root), and any event after `End`. Separators are
-written when the next item begins, never speculatively, so the text
-written before a failure is a prefix of a valid document.
+written when the next item begins, never speculatively, and a number is
+validated before its separator, so the text written before a failure is a
+prefix of a valid document and a caller that carries on after a rejected
+value does not find `[1,,2]`.
 
 ## Records (`rs/src/records.rs`)
 
@@ -139,6 +143,22 @@ stops the row and propagates.
 `is_json_number(&str)`: RFC 8259's grammar,
 `-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?`, and nothing else. Both
 renderers hold lexemes to it before copying them into the output.
+
+Both renderers check a number before writing anything for it: a lexeme
+that is not a JSON number is `INVALID_NUMBER`; a value that is not finite
+is `TARGET_VALUE_UNREPRESENTABLE`, with or without a lexeme. The check
+formats nothing.
+
+A number without a lexeme is written as the shortest digit string that
+reads back as the same f64 (Rust's float formatting), laid out
+positionally when the magnitude is zero or within `[1e-6, 1e21)` and in
+exponent form (`1e300`, `-2.5e-8`) outside. Those are the thresholds
+JavaScript's `Number#toString` uses, so they are the ones most JSON in
+circulation was written with; an integer of up to 21 digits stays an
+integer, and `1e300` is five characters rather than the 301 that Rust's
+positional form alone would write. Every form is a JSON number. The
+formatting writes into a scratch buffer the renderer keeps, so a
+lexeme-less number costs no allocation.
 
 ## Codes raised here
 
@@ -167,8 +187,15 @@ have rendered them.
 - `Quoting::Minimal` writes an empty field as nothing, so an empty string
   and an empty `null_text` read back the same; that is the dialect's
   trade-off, and `Always` is the standard profile for that reason.
-- A number lexeme is written whenever it is a JSON number, even if the
-  f64 beside it is infinite.
+- A non-finite value is refused even when a JSON-number lexeme stands
+  beside it (`1e999`). The brief names NaN and infinity unrepresentable;
+  writing the lexeme would produce JSON that serde_json, the crate's own
+  oracle, rejects as out of range, and a CSV field whose number the
+  pipeline could not carry. The CSV renderer refuses it too, so the two
+  renderers agree on what a number is.
+- Lexeme-less numbers use JavaScript's positional range, `[1e-6, 1e21)`,
+  rather than Rust's positional-only form (301 digits for `1e300`) or the
+  strictly shorter of the two layouts (which would write `1000` as `1e3`).
 - `JsonOptions { indent: Some(0) }` is compact.
 - `RecordsToJson` allows zero columns and resolves repeated labels by
   keeping the last column.
