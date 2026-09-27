@@ -1,0 +1,36 @@
+[package]
+name = "tabnas-render"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+authors = ["Richard Rodger <http://richardrodger.com>"]
+description = "Renderers for the tabnas transducer protocols: incremental CSV and JSON text from streamed tables and events."
+license = "MIT"
+repository = "https://github.com/tabnas/render"
+readme = "README.md"
+keywords = ["csv", "json", "streaming", "renderer", "parser"]
+categories = ["encoding", "text-processing"]
+
+[lib]
+name = "tabnas_render"
+path = "src/lib.rs"
+
+[dependencies]
+# Sibling checkouts, the standard tabnas development model: the transducer
+# protocols this crate renders, and the engine they are built on.
+tabnas-transduce = { path = "../../transduce/rs" }
+tabnas = { path = "../../parser/rs" }
+
+[dev-dependencies]
+tabnas-json = { path = "../../json/rs" }
+tabnas-jsonl = { path = "../../jsonl/rs" }
+tabnas-yaml = { path = "../../yaml/rs" }
+tabnas-csv = { path = "../../csv/rs" }
+serde_json = { version = "1.0", features = ["preserve_order"] }
+# Independent CSV reader, the oracle the rendered CSV is read back with.
+csv = "1.3"
+criterion = { version = "0.7", default-features = false }
+
+[[bench]]
+name = "render"
+harness = false
