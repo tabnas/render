@@ -357,24 +357,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "tabnas"
-version = "0.12.4"
-dependencies = [
- "indexmap",
- "regex",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "tabnas-csv"
-version = "0.5.10"
+version = "0.5.11"
 dependencies = [
  "indexmap",
  "serde",
  "serde_json",
- "tabnas",
  "tabnas-jsonic",
+ "tabnas-parser",
 ]
 
 [[package]]
@@ -383,7 +373,7 @@ version = "0.5.11"
 dependencies = [
  "regex",
  "serde_json",
- "tabnas",
+ "tabnas-parser",
 ]
 
 [[package]]
@@ -393,8 +383,8 @@ dependencies = [
  "indexmap",
  "regex",
  "serde_json",
- "tabnas",
  "tabnas-json",
+ "tabnas-parser",
 ]
 
 [[package]]
@@ -402,8 +392,18 @@ name = "tabnas-jsonl"
 version = "0.1.10"
 dependencies = [
  "serde_json",
- "tabnas",
  "tabnas-json",
+ "tabnas-parser",
+]
+
+[[package]]
+name = "tabnas-parser"
+version = "0.12.7"
+dependencies = [
+ "indexmap",
+ "regex",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -413,10 +413,10 @@ dependencies = [
  "criterion",
  "csv",
  "serde_json",
- "tabnas",
  "tabnas-csv",
  "tabnas-json",
  "tabnas-jsonl",
+ "tabnas-parser",
  "tabnas-transduce",
  "tabnas-yaml",
 ]
@@ -427,20 +427,20 @@ version = "0.1.0"
 dependencies = [
  "indexmap",
  "serde_json",
- "tabnas",
  "tabnas-csv",
  "tabnas-json",
+ "tabnas-parser",
 ]
 
 [[package]]
 name = "tabnas-yaml"
-version = "0.5.10"
+version = "0.5.13"
 dependencies = [
  "indexmap",
  "regex",
  "serde_json",
- "tabnas",
  "tabnas-jsonic",
+ "tabnas-parser",
 ]
 
 [[package]]
