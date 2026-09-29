@@ -19,7 +19,7 @@ path = "src/lib.rs"
 # Sibling checkouts, the standard tabnas development model: the transducer
 # protocols this crate renders, and the engine they are built on.
 tabnas-transduce = { path = "../../transduce/rs" }
-tabnas = { path = "../../parser/rs" }
+tabnas = { package = "tabnas-parser", path = "../../parser/rs" }
 
 [dev-dependencies]
 tabnas-json = { path = "../../json/rs" }
