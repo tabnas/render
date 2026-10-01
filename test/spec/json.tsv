@@ -1,0 +1,105 @@
+events	options	expected
+# JsonEvents/1 as JSON. docs/reference.md, "Shared fixtures", defines the
+# encodings; in brief:
+#
+#   events    JSON array, read RAW: "{", "}", "[", "]" and "end" for the
+#             structural events; {"key":k}; {"str":s}; null, true, false;
+#             {"num":"<lexeme>"}, {"value":"<value>"} or both.
+#   options   JSON object, read RAW; empty is {}. Fields: indent (a count
+#             of spaces, 0 or null for compact), trailing_newline (bool).
+#   expected  the exact output text through the escape codec, or
+#             ERROR:<CODE> for the first failure. A JSON escape in the
+#             output is written with its backslash doubled (\\n is the two
+#             characters backslash and n).
+#
+# Compact and indented profiles.
+["{",{"key":"a"},"[",{"num":"1"},{"value":"2.5"},{"str":"x"},true,null,"]",{"key":"b"},"{","}",{"key":"c"},"[","]",{"key":"d"},"{",{"key":"e"},false,"}","}","end"]	{}	{"a":[1,2.5,"x",true,null],"b":{},"c":[],"d":{"e":false}}
+["{",{"key":"a"},"[",{"num":"1"},{"value":"2.5"},{"str":"x"},true,null,"]",{"key":"b"},"{","}",{"key":"c"},"[","]",{"key":"d"},"{",{"key":"e"},false,"}","}","end"]	{"indent":0}	{"a":[1,2.5,"x",true,null],"b":{},"c":[],"d":{"e":false}}
+["{",{"key":"a"},"[",{"num":"1"},{"value":"2.5"},{"str":"x"},true,null,"]",{"key":"b"},"{","}",{"key":"c"},"[","]",{"key":"d"},"{",{"key":"e"},false,"}","}","end"]	{"indent":null}	{"a":[1,2.5,"x",true,null],"b":{},"c":[],"d":{"e":false}}
+["{",{"key":"a"},"[",{"num":"1"},{"value":"2.5"},{"str":"x"},true,null,"]",{"key":"b"},"{","}",{"key":"c"},"[","]",{"key":"d"},"{",{"key":"e"},false,"}","}","end"]	{"indent":2}	{\n  "a": [\n    1,\n    2.5,\n    "x",\n    true,\n    null\n  ],\n  "b": {},\n  "c": [],\n  "d": {\n    "e": false\n  }\n}
+["[","[",null,"]","]","end"]	{"indent":4}	[\n    [\n        null\n    ]\n]
+["[","{",{"key":"k"},"[","]","}","{","}","]","end"]	{"indent":1}	[\n {\n  "k": []\n },\n {}\n]
+["{","}","end"]	{"indent":2}	{}
+[null,"end"]	{"indent":2,"trailing_newline":true}	null\n
+["[",{"num":"1"},"]","end"]	{"indent":2,"trailing_newline":true}	[\n  1\n]\n
+[null,"end"]	{"trailing_newline":true}	null\n
+[null,"end"]	{"trailing_newline":false}	null
+# A trailing newline is written at the end event only.
+[null]	{"trailing_newline":true}	null
+# A root scalar is a document.
+[{"str":"x"},"end"]	{}	"x"
+[{"num":"-0.5e3"},"end"]	{}	-0.5e3
+[false,"end"]	{}	false
+[null,"end"]	{}	null
+[{"str":""},"end"]	{}	""
+["{",{"key":""},{"str":""},"}","end"]	{}	{"":""}
+# Escaping: RFC 8259's required escapes and no more. The short forms for
+# \b \t \n \f \r, \u00XX (lower-case hex) for the other controls; DEL, C1,
+# U+2028, the solidus and every non-ASCII character, non-BMP included, as
+# themselves (UTF-8).
+[{"str":"q\" b\\ n\n r\r t\t bs\b ff\f nul\u0000 c1\u0001 us\u001f del é 日本 🚀 /"},"end"]	{}	"q\\" b\\\\ n\\n r\\r t\\t bs\\b ff\\f nul\\u0000 c1\\u0001 us\\u001f del é 日本 🚀 /"
+["{",{"key":"k\"\n"},null,"}","end"]	{}	{"k\\"\\n":null}
+[{"str":"\u0000x\u0001x\u0002x\u0003x\u0004x\u0005x\u0006x\u0007x\bx\tx\nx\u000bx\fx\rx\u000ex\u000fx\u0010x\u0011x\u0012x\u0013x\u0014x\u0015x\u0016x\u0017x\u0018x\u0019x\u001ax\u001bx\u001cx\u001dx\u001ex\u001fx"},"end"]	{}	"\\u0000x\\u0001x\\u0002x\\u0003x\\u0004x\\u0005x\\u0006x\\u0007x\\bx\\tx\\nx\\u000bx\\fx\\rx\\u000ex\\u000fx\\u0010x\\u0011x\\u0012x\\u0013x\\u0014x\\u0015x\\u0016x\\u0017x\\u0018x\\u0019x\\u001ax\\u001bx\\u001cx\\u001dx\\u001ex\\u001fx"
+[{"str":"      ﻿ ￿"},"end"]	{}	"      ﻿ ￿"
+[{"str":"🚀𝄞􏿿"},"end"]	{}	"🚀𝄞􏿿"
+["{",{"key":"🚀"},{"str":"😀"},"}","end"]	{}	{"🚀":"😀"}
+[{"str":"\"\\\"\\"},"end"]	{}	"\\"\\\\\\"\\\\"
+[{"str":"\u0001 starts"},"end"]	{}	"\\u0001 starts"
+[{"str":"ends \u0001"},"end"]	{}	"ends \\u0001"
+[{"str":"</script>"},"end"]	{}	"</script>"
+# Numbers: a lexeme is written as it is; a value alone takes the shortest form.
+["[",{"num":"1.00"},{"num":"123456789012345678901234567890"},{"num":"-0"},{"num":"1E+2"},{"value":"0"},{"value":"1e21"},{"value":"0.1"},{"value":"-2"},"]","end"]	{}	[1.00,123456789012345678901234567890,-0,1E+2,0,1e21,0.1,-2]
+["[",{"value":"1e300"},{"value":"1e-300"},{"value":"1.5e17"},{"value":"1e20"},"]","end"]	{}	[1e300,1e-300,150000000000000000,100000000000000000000]
+["{",{"key":"n"},{"value":"-0"},"}","end"]	{}	{"n":-0}
+["[",{"num":"1."},"]","end"]	{}	ERROR:INVALID_NUMBER
+["[",{"num":"01"},"]","end"]	{}	ERROR:INVALID_NUMBER
+["[",{"num":"NaN"},"]","end"]	{}	ERROR:INVALID_NUMBER
+["[",{"num":"+1"},"]","end"]	{}	ERROR:INVALID_NUMBER
+["[",{"num":"0x1"},"]","end"]	{}	ERROR:INVALID_NUMBER
+[{"num":"1."},"end"]	{}	ERROR:INVALID_NUMBER
+# NaN and infinity are unrepresentable, whatever lexeme stands beside them.
+[{"value":"NaN"},"end"]	{}	ERROR:TARGET_VALUE_UNREPRESENTABLE
+[{"value":"Infinity"},"end"]	{}	ERROR:TARGET_VALUE_UNREPRESENTABLE
+[{"value":"-Infinity"},"end"]	{}	ERROR:TARGET_VALUE_UNREPRESENTABLE
+["[",{"num":"1"},{"num":"1e999"},"]","end"]	{}	ERROR:TARGET_VALUE_UNREPRESENTABLE
+[{"num":"-1e999","value":"-Infinity"},"end"]	{}	ERROR:TARGET_VALUE_UNREPRESENTABLE
+[{"num":"NaN","value":"NaN"},"end"]	{}	ERROR:INVALID_NUMBER
+# Protocol order. A second root value.
+[null,null]	{}	ERROR:PROTOCOL_ORDER_ERROR
+["{","}","["]	{}	ERROR:PROTOCOL_ORDER_ERROR
+[{"str":"a"},{"str":"b"},"end"]	{}	ERROR:PROTOCOL_ORDER_ERROR
+# An end without a complete root.
+["end"]	{}	ERROR:PROTOCOL_ORDER_ERROR
+["[","end"]	{}	ERROR:PROTOCOL_ORDER_ERROR
+["{",{"key":"a"},"end"]	{}	ERROR:PROTOCOL_ORDER_ERROR
+["{",{"key":"a"},null,"end"]	{}	ERROR:PROTOCOL_ORDER_ERROR
+# A key outside an object, inside an array, or where a value is due.
+[{"key":"a"}]	{}	ERROR:PROTOCOL_ORDER_ERROR
+["[",{"key":"a"}]	{}	ERROR:PROTOCOL_ORDER_ERROR
+["{",{"key":"a"},{"key":"b"}]	{}	ERROR:PROTOCOL_ORDER_ERROR
+[null,{"key":"a"}]	{}	ERROR:PROTOCOL_ORDER_ERROR
+# A value where a key is due.
+["{",null]	{}	ERROR:PROTOCOL_ORDER_ERROR
+["{","["]	{}	ERROR:PROTOCOL_ORDER_ERROR
+["{","{"]	{}	ERROR:PROTOCOL_ORDER_ERROR
+["{",{"key":"a"},null,{"str":"b"}]	{}	ERROR:PROTOCOL_ORDER_ERROR
+# An unbalanced or mismatched close.
+["}"]	{}	ERROR:PROTOCOL_ORDER_ERROR
+["]"]	{}	ERROR:PROTOCOL_ORDER_ERROR
+["[","}"]	{}	ERROR:PROTOCOL_ORDER_ERROR
+["{","]"]	{}	ERROR:PROTOCOL_ORDER_ERROR
+["{",{"key":"a"},"}"]	{}	ERROR:PROTOCOL_ORDER_ERROR
+["[","]","]"]	{}	ERROR:PROTOCOL_ORDER_ERROR
+# Anything after the end, and a second end.
+[null,"end","end"]	{}	ERROR:PROTOCOL_ORDER_ERROR
+[null,"end",null]	{}	ERROR:PROTOCOL_ORDER_ERROR
+[null,"end",{"key":"a"}]	{}	ERROR:PROTOCOL_ORDER_ERROR
+[null,"end","{"]	{}	ERROR:PROTOCOL_ORDER_ERROR
+[null,"end","["]	{}	ERROR:PROTOCOL_ORDER_ERROR
+[null,"end","}"]	{}	ERROR:PROTOCOL_ORDER_ERROR
+[null,"end","]"]	{}	ERROR:PROTOCOL_ORDER_ERROR
+[null,"end",{"str":"x"}]	{}	ERROR:PROTOCOL_ORDER_ERROR
+[null,"end",{"num":"1"}]	{}	ERROR:PROTOCOL_ORDER_ERROR
+# Without an end the text so far is the output: nothing is held back but the separators.
+["{",{"key":"a"},"[",null]	{}	{"a":[null
+["[",{"num":"1"}]	{}	[1

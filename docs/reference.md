@@ -201,6 +201,112 @@ only once `End` has been rendered AND flushed (or, for `RecordsToJson`,
 forwarded and accepted); an `End` whose flush failed leaves the renderer
 not done.
 
+## Shared fixtures (`test/spec/`)
+
+Every runtime of this repository runs the same rows: the fleet's fixture
+format, loaded with `@tabnas/support` (the Rust runners are
+`rs/tests/spec_*.rs`, on `tabnas_support::Runner`). A row is a header-named
+set of tab-separated cells; `#` lines without a tab are comments. A port
+reproduces the rows exactly; where it cannot, the difference goes in
+[`DIVERGENCE.md`](../DIVERGENCE.md) before the port merges.
+
+| File | Columns | What a row pins |
+|---|---|---|
+| `csv.tsv` | `events`, `options`, `expected` | `TableRows/1` through `CsvRenderer` |
+| `json.tsv` | `events`, `options`, `expected` | `JsonEvents/1` through `JsonRenderer` |
+| `number.tsv` | `number`, `expected` | one number through both renderers, which must agree |
+| `records.tsv` | `events`, `options`, `expected` | `TableRows/1` through `RecordsToJson` into a compact `JsonRenderer` |
+| `text.tsv` | `pipeline`, `ops`, `expected` | the text algebra over a coalescing writer |
+
+**Reading the cells.** The input cells (`events`, `options`, `number`,
+`pipeline`, `ops`) are JSON and are read RAW: they do not go through the
+escape codec, because JSON has escapes of its own and the codec would turn
+the two characters `\n` inside a JSON string into a line feed that JSON
+does not allow. An empty `options` or `pipeline` cell is `{}`. The
+`expected` cell of `csv.tsv`, `json.tsv`, `number.tsv` and `records.tsv`
+is the exact output text through the support escape codec: `\r`, `\n`,
+`\t` and `\\` decode, every other backslash sequence stands, so a JSON
+escape in the output is written with its backslash doubled (`\\n`). The
+`expected` cell of `text.tsv` is a JSON array of strings. In every file
+`ERROR:<CODE>` is a failure with that `tabnas_transduce::Code`, the
+first one the run meets: events are fed in order and the run stops at
+the first failure. A fixture cell that does not follow these encodings
+is a defect in the fixture and fails the suite loudly; it never becomes
+a code a row could match.
+
+**Numbers.** A number is an object: `{"num": "<lexeme>"}`,
+`{"value": "<value>"}`, or both. A value is a JSON number that is finite
+as an f64 (every runtime's decimal parser rounds to the nearest f64, so
+the spelling names one value everywhere), or `NaN`, `Infinity` or
+`-Infinity`. With a lexeme and no value, the value is the lexeme read as
+a decimal when the lexeme is a JSON number (`1e999` overflows to
+infinity) and 0 when it is not; both renderers judge the lexeme before
+the value, so that 0 never decides a row. A bare JSON number is not a
+number cell or event: it cannot say whether it carries a lexeme.
+
+**Table events** (`csv.tsv`, `records.tsv`): a JSON array of
+`{"schema": [labels]}`, `{"row": [cells]}` and `"end"`. A cell is `null`,
+`true`, `false`, a JSON string, a number object, or `{"missing": true}`.
+CSV options: `delimiter` (one character), `newline` (`"crlf"` | `"lf"`),
+`header` (bool), `null_text` (string), `missing` (a string, or `null` for
+the error policy), `quoting` (`"always"` | `"minimal"`). Records options:
+`missing` (`"skip"` | `"null"` | `"error"`). The CSV output is a
+`StringOut`, so a row without `"end"` pins the text written so far.
+
+**JSON events** (`json.tsv`): a JSON array of `"{"`, `"}"`, `"["`, `"]"`
+and `"end"` for the structural events, `{"key": k}`, `{"str": s}`,
+`null`, `true`, `false` and number objects. Options: `indent` (a count of
+spaces; `0` or `null` is compact) and `trailing_newline` (bool).
+
+**`number.tsv`** runs each number through the JSON renderer as a root
+scalar and through the CSV renderer as the one field of a minimally
+quoted, headerless, LF table, and requires the two to agree (text, or
+code) before comparing. A lexeme is written verbatim. A value without a
+lexeme is written as described under Numbers above, and **this is no
+runtime's default formatting**, so a port normalises to the rows rather
+than trusting its standard library:
+
+- the digits are the shortest that read back as the same f64 (JavaScript's
+  `Number#toString`, Go's `strconv.FormatFloat(v, 'g', -1, 64)` and Rust's
+  `{}` agree on the digits; they differ only in layout);
+- positional when the magnitude is zero or within `[1e-6, 1e21)`,
+  exponent form outside;
+- the exponent has no `+` and no leading zeros: `1e21`, `1e-7`,
+  `1.7976931348623157e308` (JavaScript writes `1e+21`; Go's `'e'` writes
+  `1e+21` and `1e-07`; Rust's `{:e}` is the fixture's form);
+- negative zero is `-0` (JavaScript's `String(-0)` is `0`; Go's `'f'`
+  writes `-0`);
+- an integral value is written without a fraction: `100`, not `100.0` or
+  `1e2`.
+
+**`text.tsv`.** `pipeline` names the stack: `budget` (the coalescing
+budget in bytes, `DEFAULT_BUDGET` when absent), `limit`
+(`max_output_bytes`, none when absent) and `stages`, outermost first, each
+`{"join": "<separator>"}`, `{"concat": true}` or
+`{"replace": ["<from>", "<to>"]}`, over a `WriteOut` whose writer keeps
+each `write` call as one chunk and accepts it whole. `ops` is a script on
+the outermost stage: a string is a fragment, `{"op": "start"}` and
+`{"op": "end"}` are item markers (the outermost stage must then be a join
+or a concat), `{"op": "flush"}` flushes. The result is the chunks the
+writer received, in order, after the last operation, with nothing flushed
+for the row: what is still buffered or carried is not in it, as
+`into_inner` drops it. Chunk boundaries are part of the contract only
+through the coalescing rules (a fragment that would overflow the buffer
+drains it first, a fragment at least as large as the budget goes to the
+writer directly, a zero-length fragment is never a write), so the rows
+that pin separators and replacements flush once at a large budget and
+compare one chunk. The output limit counts UTF-8 bytes, buffered as well
+as written, after replacement; a port whose strings are UTF-16 measures
+the encoded length, not the string length (`🚀` is 4 bytes).
+
+**What the rows do not pin.** A row records the output, or the first
+failure's code. It cannot record `committed_output`, the output a failed
+run leaves behind, a writer that fails or takes part of a buffer
+(`OUTPUT_FAILED`), `Flow::Stop`, the `output_bytes` metric, or the
+renderer's state after a failure (a row that fails writes nothing, and a
+caller may carry on). Those stay in each runtime's own tests, beside the
+code; [`DIVERGENCE.md`](../DIVERGENCE.md) lists the Rust ones.
+
 ## Decisions where the design brief was silent
 
 - `WriteOut` counts `output_bytes` when bytes reach the writer, not when

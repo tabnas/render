@@ -1,0 +1,126 @@
+number	expected
+# One number through both renderers: compact JSON as a root scalar, and a
+# minimally quoted, headerless, LF CSV field. The runner requires the two
+# to agree, then compares.
+#
+#   number    a number object, read RAW: {"num":"<lexeme>"},
+#             {"value":"<value>"}, or both. A value is a JSON number that
+#             is finite as an f64, or NaN, Infinity or -Infinity. With a
+#             lexeme and no value, the value is the lexeme read as a decimal
+#             (1e999 overflows to Infinity) when it is a JSON number, and 0
+#             when it is not.
+#   expected  the text written, through the escape codec, or ERROR:<CODE>.
+#
+# A lexeme is checked against RFC 8259's number grammar and written
+# verbatim: no normalisation of case, sign, zeros or exponent.
+{"num":"0"}	0
+{"num":"-0"}	-0
+{"num":"1"}	1
+{"num":"-1"}	-1
+{"num":"10"}	10
+{"num":"1.5"}	1.5
+{"num":"0.0"}	0.0
+{"num":"1.00"}	1.00
+{"num":"50.250"}	50.250
+{"num":"1e5"}	1e5
+{"num":"1E5"}	1E5
+{"num":"1e+5"}	1e+5
+{"num":"1e-5"}	1e-5
+{"num":"1E+2"}	1E+2
+{"num":"1.5e10"}	1.5e10
+{"num":"-1.5E+308"}	-1.5E+308
+{"num":"123456789012345678901234567890"}	123456789012345678901234567890
+{"num":"0.1000000000000000055511151231257827"}	0.1000000000000000055511151231257827
+{"num":"-0.000001"}	-0.000001
+{"num":"1e-999"}	1e-999
+{"num":"9007199254740993"}	9007199254740993
+{"num":"0e0"}	0e0
+{"num":"-0.0e-0"}	-0.0e-0
+# A lexeme that is not a JSON number: INVALID_NUMBER, judged before the value.
+{"num":""}	ERROR:INVALID_NUMBER
+{"num":"-"}	ERROR:INVALID_NUMBER
+{"num":"+1"}	ERROR:INVALID_NUMBER
+{"num":"01"}	ERROR:INVALID_NUMBER
+{"num":"-01"}	ERROR:INVALID_NUMBER
+{"num":"00"}	ERROR:INVALID_NUMBER
+{"num":"1."}	ERROR:INVALID_NUMBER
+{"num":".5"}	ERROR:INVALID_NUMBER
+{"num":"1e"}	ERROR:INVALID_NUMBER
+{"num":"1e+"}	ERROR:INVALID_NUMBER
+{"num":"1.e5"}	ERROR:INVALID_NUMBER
+{"num":"1.5e"}	ERROR:INVALID_NUMBER
+{"num":"--1"}	ERROR:INVALID_NUMBER
+{"num":"0x10"}	ERROR:INVALID_NUMBER
+{"num":"0x1"}	ERROR:INVALID_NUMBER
+{"num":"NaN"}	ERROR:INVALID_NUMBER
+{"num":"Infinity"}	ERROR:INVALID_NUMBER
+{"num":"-Infinity"}	ERROR:INVALID_NUMBER
+{"num":" 1"}	ERROR:INVALID_NUMBER
+{"num":"1 "}	ERROR:INVALID_NUMBER
+{"num":"1_000"}	ERROR:INVALID_NUMBER
+{"num":"1,5"}	ERROR:INVALID_NUMBER
+{"num":"١"}	ERROR:INVALID_NUMBER
+{"num":"１"}	ERROR:INVALID_NUMBER
+{"num":"1e5.0"}	ERROR:INVALID_NUMBER
+{"num":"0.1.2"}	ERROR:INVALID_NUMBER
+{"num":"Inf"}	ERROR:INVALID_NUMBER
+{"num":"nan"}	ERROR:INVALID_NUMBER
+{"num":"NaN","value":"NaN"}	ERROR:INVALID_NUMBER
+{"num":"Infinity","value":"Infinity"}	ERROR:INVALID_NUMBER
+# A JSON-number lexeme beside a non-finite value: TARGET_VALUE_UNREPRESENTABLE.
+{"num":"1e999"}	ERROR:TARGET_VALUE_UNREPRESENTABLE
+{"num":"-1e999"}	ERROR:TARGET_VALUE_UNREPRESENTABLE
+{"num":"1","value":"Infinity"}	ERROR:TARGET_VALUE_UNREPRESENTABLE
+{"num":"0","value":"NaN"}	ERROR:TARGET_VALUE_UNREPRESENTABLE
+# A value with no lexeme: NaN and infinity are refused.
+{"value":"NaN"}	ERROR:TARGET_VALUE_UNREPRESENTABLE
+{"value":"Infinity"}	ERROR:TARGET_VALUE_UNREPRESENTABLE
+{"value":"-Infinity"}	ERROR:TARGET_VALUE_UNREPRESENTABLE
+# A value with no lexeme: the shortest digit string that reads back as the
+# same f64, positional when the magnitude is zero or within [1e-6, 1e21)
+# and exponent form outside. THIS IS NOT ANY RUNTIME'S DEFAULT: the
+# exponent has no '+' and no leading zeros (JavaScript's toString writes
+# 1e+21, Go's strconv 'e' writes 1e+21 and 1e-07), and negative zero is
+# -0 (JavaScript's String(-0) is 0). A port normalises to these rows.
+{"value":"0"}	0
+{"value":"-0"}	-0
+{"value":"1"}	1
+{"value":"-2"}	-2
+{"value":"100"}	100
+{"value":"1e2"}	100
+{"value":"0.1"}	0.1
+{"value":"0.30000000000000004"}	0.30000000000000004
+{"value":"50.25"}	50.25
+{"value":"123456.789"}	123456.789
+{"value":"9007199254740992"}	9007199254740992
+{"value":"9007199254740993"}	9007199254740992
+{"value":"1.5e17"}	150000000000000000
+{"value":"1.23456789e18"}	1234567890000000000
+{"value":"1e20"}	100000000000000000000
+{"value":"1.2345678901234567e20"}	123456789012345670000
+{"value":"9.999999999999999e20"}	999999999999999900000
+{"value":"-9.999999999999999e20"}	-999999999999999900000
+{"value":"0.00001"}	0.00001
+{"value":"0.000001"}	0.000001
+{"value":"-0.000025"}	-0.000025
+{"value":"0.0000015"}	0.0000015
+{"value":"1e21"}	1e21
+{"value":"-1e21"}	-1e21
+{"value":"1.2345e21"}	1.2345e21
+{"value":"1e100"}	1e100
+{"value":"1e300"}	1e300
+{"value":"-1.5e300"}	-1.5e300
+{"value":"1.7976931348623157e308"}	1.7976931348623157e308
+{"value":"-1.7976931348623157e308"}	-1.7976931348623157e308
+{"value":"9.99999e-7"}	9.99999e-7
+{"value":"1e-7"}	1e-7
+{"value":"1.5e-7"}	1.5e-7
+{"value":"-2.5e-8"}	-2.5e-8
+{"value":"1.23e-18"}	1.23e-18
+{"value":"1e-300"}	1e-300
+{"value":"2.2250738585072014e-308"}	2.2250738585072014e-308
+{"value":"5e-324"}	5e-324
+# A lexeme wins over the value beside it, however they differ.
+{"num":"2.50","value":"2.5"}	2.50
+{"num":"1","value":"2"}	1
+{"num":"0","value":"-0"}	0

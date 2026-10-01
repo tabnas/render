@@ -1,0 +1,101 @@
+events	options	expected
+# TableRows/1 as CSV. docs/reference.md, "Shared fixtures", defines the
+# encodings; in brief:
+#
+#   events    JSON array, read RAW (no escape codec): {"schema":[labels]},
+#             {"row":[cells]} and "end", fed in order. A cell is null,
+#             true, false, a JSON string, {"num":"<lexeme>"},
+#             {"value":"<value>"} (both may be given), or {"missing":true}.
+#   options   JSON object, read RAW; empty is {}. Fields: delimiter (one
+#             character), newline ("crlf" | "lf"), header (bool),
+#             null_text (string), missing (string, or null for the error
+#             policy), quoting ("always" | "minimal").
+#   expected  the exact output text through the escape codec (\r, \n, \t
+#             and \\ decoded), or ERROR:<CODE> for the first failure.
+#
+# The standard profile (RFC 4180, always quoted, CRLF): Appendix A.
+[{"schema":["name","age"]},{"row":["ada",{"num":"36"}]},"end"]	{}	"name","age"\r\n"ada","36"\r\n
+[{"schema":["a","b"]},{"row":["",""]},"end"]	{}	"a","b"\r\n"",""\r\n
+[{"schema":["a"]},{"row":["x, y, z"]},"end"]	{}	"a"\r\n"x, y, z"\r\n
+[{"schema":["a"]},{"row":["say \"hi\""]},{"row":["\""]},{"row":["\"\""]},"end"]	{}	"a"\r\n"say ""hi"""\r\n""""\r\n""""""\r\n
+[{"schema":["a"]},{"row":["line1\r\nline2\nline3\rend"]},"end"]	{}	"a"\r\n"line1\r\nline2\nline3\rend"\r\n
+[{"schema":["名"]},{"row":["héllo 日本語 🚀"]},"end"]	{}	"名"\r\n"héllo 日本語 🚀"\r\n
+[{"schema":["a","b"]},{"row":[false,true]},"end"]	{}	"a","b"\r\n"false","true"\r\n
+[{"schema":["a","b"]},{"row":["\t","=1+2"]},"end"]	{}	"a","b"\r\n"\t","=1+2"\r\n
+# Numbers: a lexeme is written as it is; a value alone takes the shortest form.
+[{"schema":["z","b","big","bigger","tiny"]},{"row":[{"value":"0"},{"value":"50.25"},{"value":"1e20"},{"value":"1e21"},{"value":"1e-300"}]},"end"]	{}	"z","b","big","bigger","tiny"\r\n"0","50.25","100000000000000000000","1e21","1e-300"\r\n
+[{"schema":["a","b","c","d"]},{"row":[{"num":"123456789012345678901234567890"},{"num":"0.1000000000000000055511151231257827"},{"num":"-1.5E+308"},{"num":"50.250"}]},"end"]	{}	"a","b","c","d"\r\n"123456789012345678901234567890","0.1000000000000000055511151231257827","-1.5E+308","50.250"\r\n
+[{"schema":["a"]},{"row":[{"num":"2.50","value":"2.5"}]},"end"]	{}	"a"\r\n"2.50"\r\n
+# A lexeme that is not a JSON number is INVALID_NUMBER.
+[{"schema":["a"]},{"row":[{"num":"1."}]},"end"]	{}	ERROR:INVALID_NUMBER
+[{"schema":["a"]},{"row":[{"num":"01"}]},"end"]	{}	ERROR:INVALID_NUMBER
+[{"schema":["a"]},{"row":[{"num":"NaN"}]},"end"]	{}	ERROR:INVALID_NUMBER
+[{"schema":["a"]},{"row":[{"num":"0x10"}]},"end"]	{}	ERROR:INVALID_NUMBER
+[{"schema":["a"]},{"row":[{"num":"1_000"}]},"end"]	{}	ERROR:INVALID_NUMBER
+[{"schema":["a"]},{"row":[{"num":""}]},"end"]	{}	ERROR:INVALID_NUMBER
+# NaN and infinity have no CSV form, with or without a lexeme beside them.
+[{"schema":["a"]},{"row":[{"value":"NaN"}]},"end"]	{}	ERROR:TARGET_VALUE_UNREPRESENTABLE
+[{"schema":["a"]},{"row":[{"value":"Infinity"}]},"end"]	{}	ERROR:TARGET_VALUE_UNREPRESENTABLE
+[{"schema":["a"]},{"row":[{"value":"-Infinity"}]},"end"]	{}	ERROR:TARGET_VALUE_UNREPRESENTABLE
+[{"schema":["a","b"]},{"row":["x",{"num":"1e999"}]},"end"]	{}	ERROR:TARGET_VALUE_UNREPRESENTABLE
+[{"schema":["a","b"]},{"row":["x",{"num":"1e999","value":"Infinity"}]},"end"]	{}	ERROR:TARGET_VALUE_UNREPRESENTABLE
+# The lexeme is judged before the value: NaN spelled "NaN" is a bad lexeme.
+[{"schema":["a"]},{"row":[{"num":"NaN","value":"NaN"}]},"end"]	{}	ERROR:INVALID_NUMBER
+# Null writes null_text, empty by default.
+[{"schema":["a","b"]},{"row":[null,"x"]},"end"]	{}	"a","b"\r\n"","x"\r\n
+[{"schema":["a"]},{"row":[null]},"end"]	{"null_text":"NULL"}	"a"\r\n"NULL"\r\n
+[{"schema":["a"]},{"row":[null]},"end"]	{"null_text":"say \"x\""}	"a"\r\n"say ""x"""\r\n
+# Missing is MISSING_VALUE unless a text is configured; the text is quoted like any field.
+[{"schema":["a","b"]},{"row":["x",{"missing":true}]},"end"]	{}	ERROR:MISSING_VALUE
+[{"schema":["a","b"]},{"row":["x",{"missing":true}]},"end"]	{"missing":null}	ERROR:MISSING_VALUE
+[{"schema":["a","b"]},{"row":[{"missing":true},"x"]},"end"]	{"missing":"N/A"}	"a","b"\r\n"N/A","x"\r\n
+[{"schema":["a"]},{"row":[{"missing":true}]},"end"]	{"missing":""}	"a"\r\n""\r\n
+[{"schema":["a"]},{"row":[{"missing":true}]},"end"]	{"missing":"a,b","quoting":"minimal"}	a\r\n"a,b"\r\n
+# A row is checked whole before it is written: the first failing cell's code, wherever it is.
+[{"schema":["a","b"]},{"row":[{"missing":true},{"num":"1."}]},"end"]	{}	ERROR:MISSING_VALUE
+[{"schema":["a","b"]},{"row":[{"num":"1."},{"missing":true}]},"end"]	{}	ERROR:INVALID_NUMBER
+# Labels: duplicates allowed, quoted like fields; no rows still writes the header.
+[{"schema":["a","a"]},{"row":["1","2"]},"end"]	{}	"a","a"\r\n"1","2"\r\n
+[{"schema":["a","b"]},"end"]	{}	"a","b"\r\n
+[{"schema":["x\"y","p,q"]},"end"]	{}	"x""y","p,q"\r\n
+[{"schema":["","b"]},{"row":["1","2"]},"end"]	{"quoting":"minimal"}	,b\r\n1,2\r\n
+# The header can be turned off; every record, the last included, ends with the newline.
+[{"schema":["a"]},{"row":["x"]},"end"]	{"header":false}	"x"\r\n
+[{"schema":["a"]},"end"]	{"header":false}	
+[{"schema":["a"]},{"row":["1"]},{"row":["2"]},"end"]	{}	"a"\r\n"1"\r\n"2"\r\n
+# Text is written as rows arrive; a table with no end is the records so far.
+[{"schema":["a"]},{"row":["1"]}]	{}	"a"\r\n"1"\r\n
+# Dialects: LF, other delimiters, minimal quoting.
+[{"schema":["a"]},{"row":["x"]},"end"]	{"newline":"lf"}	"a"\n"x"\n
+[{"schema":["a"]},{"row":["x"]},"end"]	{"newline":"crlf"}	"a"\r\n"x"\r\n
+[{"schema":["a","b"]},{"row":["x,y","z"]},"end"]	{"delimiter":"\t"}	"a"\t"b"\r\n"x,y"\t"z"\r\n
+[{"schema":["a","b"]},{"row":["x","y"]},"end"]	{"delimiter":"|"}	"a"|"b"\r\n"x"|"y"\r\n
+[{"schema":["a","b"]},{"row":["x","y"]},"end"]	{"delimiter":" "}	"a" "b"\r\n"x" "y"\r\n
+[{"schema":["a","b"]},{"row":["x","y"]},"end"]	{"delimiter":"x"}	"a"x"b"\r\n"x"x"y"\r\n
+[{"schema":["a","b"]},{"row":["p→q","y"]},"end"]	{"delimiter":"→","quoting":"minimal"}	a→b\r\n"p→q"→y\r\n
+[{"schema":["p","e","c","q","lf","cr","n","nul"]},{"row":["plain","","a,b","say \"hi\"","x\ny","x\ry",{"num":"1.50"},null]},"end"]	{"quoting":"minimal"}	p,e,c,q,lf,cr,n,nul\r\nplain,,"a,b","say ""hi""","x\ny","x\ry",1.50,\r\n
+[{"schema":["a","b"]},{"row":["x;y","x,y"]},"end"]	{"quoting":"minimal","delimiter":";"}	a;b\r\n"x;y";x,y\r\n
+[{"schema":["a","b"]},{"row":[" x ","\t"]},"end"]	{"quoting":"minimal"}	a,b\r\n x ,\t\r\n
+[{"schema":["a"]},{"row":["x"]},"end"]	{"quoting":"always"}	"a"\r\n"x"\r\n
+[{"schema":["a","b","c"]},{"row":[true,null,{"value":"0.5"}]},"end"]	{"quoting":"minimal","newline":"lf","null_text":"-"}	a,b,c\ntrue,-,0.5\n
+# The quote, a line break and NUL cannot be the delimiter: refused when the renderer is built.
+[{"schema":["a"]},"end"]	{"delimiter":"\""}	ERROR:TARGET_VALUE_UNREPRESENTABLE
+[{"schema":["a"]},"end"]	{"delimiter":"\r"}	ERROR:TARGET_VALUE_UNREPRESENTABLE
+[{"schema":["a"]},"end"]	{"delimiter":"\n"}	ERROR:TARGET_VALUE_UNREPRESENTABLE
+[{"schema":["a"]},"end"]	{"delimiter":"\u0000"}	ERROR:TARGET_VALUE_UNREPRESENTABLE
+# A table with no columns has no CSV form.
+[{"schema":[]},"end"]	{}	ERROR:TARGET_VALUE_UNREPRESENTABLE
+[{"schema":[]}]	{"header":false}	ERROR:TARGET_VALUE_UNREPRESENTABLE
+# Protocol order: one schema, first; rows of its width; one end, last.
+[{"row":["x"]}]	{}	ERROR:PROTOCOL_ORDER_ERROR
+["end"]	{}	ERROR:PROTOCOL_ORDER_ERROR
+[{"schema":["a"]},{"schema":["a"]},"end"]	{}	ERROR:PROTOCOL_ORDER_ERROR
+[{"schema":["a","b"]},{"row":[]},"end"]	{}	ERROR:PROTOCOL_ORDER_ERROR
+[{"schema":["a","b"]},{"row":["1"]},"end"]	{}	ERROR:PROTOCOL_ORDER_ERROR
+[{"schema":["a","b"]},{"row":["1","2","3"]},"end"]	{}	ERROR:PROTOCOL_ORDER_ERROR
+[{"schema":["a"]},{"row":["1"]},{"row":["1","2"]},"end"]	{}	ERROR:PROTOCOL_ORDER_ERROR
+[{"schema":["a"]},"end","end"]	{}	ERROR:PROTOCOL_ORDER_ERROR
+[{"schema":["a"]},"end",{"row":["x"]}]	{}	ERROR:PROTOCOL_ORDER_ERROR
+[{"schema":["a"]},"end",{"schema":["a"]}]	{}	ERROR:PROTOCOL_ORDER_ERROR
+# Width is checked before cells: a short row holding Missing is a protocol error.
+[{"schema":["a","b"]},{"row":[{"missing":true}]},"end"]	{}	ERROR:PROTOCOL_ORDER_ERROR

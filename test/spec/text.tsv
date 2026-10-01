@@ -1,0 +1,84 @@
+pipeline	ops	expected
+# The text algebra as data. A stack of stages over a coalescing writer, a
+# script of operations on the outermost stage, and the chunks the writer
+# received.
+#
+#   pipeline  JSON object, read RAW; empty is {}. budget: the coalescing
+#             budget in bytes (default 32768); limit: max_output_bytes
+#             (absent for none); stages: outermost first, each
+#             {"join":"<sep>"}, {"concat":true} or {"replace":["<from>","<to>"]}.
+#   ops       JSON array, read RAW: a string is a fragment written to the
+#             outermost stage; {"op":"start"} and {"op":"end"} are item
+#             markers (the outermost stage must be a join or concat);
+#             {"op":"flush"} flushes.
+#   expected  JSON array of the chunks the writer received, one per write
+#             call, in order, after the last operation. Nothing is flushed
+#             for the row: what is still buffered is not in the result. Or
+#             ERROR:<CODE> for the first failing operation.
+#
+# Coalescing: a fragment that would overflow the buffer flushes it first; a
+# fragment at least as large as the budget goes to the writer directly; a
+# budget of 0 writes every non-empty fragment as it arrives.
+{}	["a","b"]	[]
+{}	["a","b",{"op":"flush"}]	["ab"]
+{}	[{"op":"flush"}]	[]
+{"budget":0}	["a","b"]	["a","b"]
+{"budget":0}	["","a",""]	["a"]
+{"budget":4}	["ab","cd","e",{"op":"flush"}]	["abcd","e"]
+{"budget":4}	["ab","cdefg",{"op":"flush"}]	["ab","cdefg"]
+{"budget":4}	["abcd"]	["abcd"]
+{"budget":4}	["abc","d"]	[]
+{"budget":4}	["abc","de"]	["abc"]
+{"budget":4}	["a",{"op":"flush"},"b",{"op":"flush"}]	["a","b"]
+{"budget":3}	["é","é",{"op":"flush"}]	["é","é"]
+# The output limit counts UTF-8 bytes, buffered as well as written, and
+# fails before the fragment that would exceed it.
+{"limit":5,"budget":0}	["abc","de"]	["abc","de"]
+{"limit":5,"budget":0}	["abc","def"]	ERROR:RESOURCE_LIMIT_EXCEEDED
+{"limit":3}	["ab","cd"]	ERROR:RESOURCE_LIMIT_EXCEEDED
+{"limit":0}	[""]	[]
+{"limit":0}	["a"]	ERROR:RESOURCE_LIMIT_EXCEEDED
+{"limit":4,"budget":0}	["é","é"]	["é","é"]
+{"limit":5,"budget":0}	["é","é","é"]	ERROR:RESOURCE_LIMIT_EXCEEDED
+{"limit":3}	["🚀"]	ERROR:RESOURCE_LIMIT_EXCEEDED
+{"limit":4,"budget":0}	["🚀"]	["🚀"]
+{"limit":2}	["日"]	ERROR:RESOURCE_LIMIT_EXCEEDED
+# Join: the separator goes before every item but the first, never between
+# the fragments of one item; an empty item is still an item; a fragment
+# outside an item is an item of its own.
+{"stages":[{"join":","}]}	["a","b","c",{"op":"flush"}]	["a,b,c"]
+{"stages":[{"join":", "}]}	["a","b",{"op":"flush"}]	["a, b"]
+{"stages":[{"join":","}]}	[{"op":"start"},"a","b",{"op":"end"},{"op":"start"},{"op":"end"},{"op":"start"},"c",{"op":"end"},{"op":"flush"}]	["ab,,c"]
+{"stages":[{"join":","}]}	[{"op":"start"},{"op":"end"},{"op":"start"},{"op":"end"},{"op":"flush"}]	[","]
+{"stages":[{"join":","}]}	[{"op":"start"},{"op":"end"},{"op":"flush"}]	[]
+{"stages":[{"join":","}]}	["x",{"op":"start"},"y",{"op":"end"},"z",{"op":"flush"}]	["x,y,z"]
+{"stages":[{"join":","}]}	["","",{"op":"flush"}]	[","]
+{"stages":[{"join":""}]}	["a","b",{"op":"flush"}]	["ab"]
+{"stages":[{"join":","}]}	[{"op":"start"},"a",{"op":"flush"}]	["a"]
+{"stages":[{"join":","}]}	[{"op":"start"},{"op":"start"}]	ERROR:PROTOCOL_ORDER_ERROR
+{"stages":[{"join":","}]}	[{"op":"end"}]	ERROR:PROTOCOL_ORDER_ERROR
+{"stages":[{"join":","}]}	[{"op":"start"},{"op":"end"},{"op":"end"}]	ERROR:PROTOCOL_ORDER_ERROR
+# Concat: a join with no separator; the markers behave as join's.
+{"stages":[{"concat":true}]}	[{"op":"start"},"a",{"op":"end"},{"op":"start"},"b",{"op":"end"},"c",{"op":"flush"}]	["abc"]
+{"stages":[{"concat":true}]}	[{"op":"start"},{"op":"start"}]	ERROR:PROTOCOL_ORDER_ERROR
+{"stages":[{"concat":true}]}	[{"op":"end"}]	ERROR:PROTOCOL_ORDER_ERROR
+# ReplaceText: str::replace's left-to-right, non-overlapping matches however
+# the text is chunked; the bounded carry is written at a flush, which is a
+# boundary no match spans; an empty literal is the identity.
+{"stages":[{"replace":["ab","X"]}]}	["a","b","cab",{"op":"flush"}]	["XcX"]
+{"stages":[{"replace":["aa","b"]}]}	["a","a","a",{"op":"flush"}]	["ba"]
+{"stages":[{"replace":["aa","b"]}]}	["aaaa",{"op":"flush"}]	["bb"]
+{"stages":[{"replace":["abc","-"]}]}	["xab","abc",{"op":"flush"}]	["xab-"]
+{"stages":[{"replace":["ab","X"]}]}	["xa",{"op":"flush"}]	["xa"]
+{"stages":[{"replace":["ab","X"]}],"budget":0}	["xa"]	["x"]
+{"stages":[{"replace":["ab","X"]}],"budget":0}	["a",{"op":"flush"},"b",{"op":"flush"}]	["a","b"]
+{"stages":[{"replace":["ab",""]}]}	["xaby",{"op":"flush"}]	["xy"]
+{"stages":[{"replace":["",""]}]}	["abc",{"op":"flush"}]	["abc"]
+{"stages":[{"replace":["日本","JP"]}]}	["日","本語",{"op":"flush"}]	["JP語"]
+{"stages":[{"replace":["\r\n","\n"]}]}	["a\r","\nb\r",{"op":"flush"}]	["a\nb\r"]
+# Stacks: stages compose, outermost first; the limit sees the bytes that reach the writer.
+{"stages":[{"join":","},{"replace":[",",";"]}]}	["a","b",{"op":"flush"}]	["a;b"]
+{"stages":[{"join":"--"},{"replace":["--","+"]}]}	["a","b","c",{"op":"flush"}]	["a+b+c"]
+{"stages":[{"replace":["a","aaaa"]}],"limit":5,"budget":0}	["a","a"]	ERROR:RESOURCE_LIMIT_EXCEEDED
+{"stages":[{"replace":["a","aaaa"]}],"limit":8,"budget":0}	["a","a"]	["aaaa","aaaa"]
+{"stages":[{"join":","}],"limit":3}	["a","b","c"]	ERROR:RESOURCE_LIMIT_EXCEEDED
