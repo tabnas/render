@@ -175,6 +175,9 @@ describe('RecordsToJson', () => {
     assert.match(err3.message, /row 1 has 2 cells/)
     fails('PROTOCOL_ORDER_ERROR', () => r.tableEvent(row([])))
     fails('PROTOCOL_ORDER_ERROR', () => r.tableEvent(row([{ type: 'date' } as any])))
+    fails('PROTOCOL_ORDER_ERROR', () => r.tableEvent(row([undefined as any])))
+    fails('PROTOCOL_ORDER_ERROR', () => r.tableEvent(undefined as any))
+    fails('PROTOCOL_ORDER_ERROR', () => r.tableEvent(null as any))
 
     r.tableEvent(END)
     for (const ev of [END, row([s('x')]), schema(['a'])]) {

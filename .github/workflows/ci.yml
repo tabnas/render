@@ -1,0 +1,237 @@
+# CI caller: the org-shared polyglot-ci workflow, which clones the tabnas
+# siblings named in `deps` beside this checkout, builds their TypeScript
+# in that order, and builds and tests ts/ and go/ here against them. The
+# Rust crate has a gate of its own, rust.yml. Live. Change it here, in a
+# reviewed pull request: session credentials can push
+# .github/workflows/* (admin DECISIONS.md ADR-8, as amended 2026-09-24).
+name: ci
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  ci:
+    uses: tabnas/.github/.github/workflows/polyglot-ci.yml@main
+    with:
+      deps: "parser support json jsonic csv jsonl yaml transduce"
+
+  # TEMPORARY: the two jobs below exist only while a sibling this
+  # repository depends on is unpublished, and each fails, asking to be
+  # deleted, once nothing it covers is.
+  #
+  # transduce is the one today: @tabnas/transduce is not on npm, and
+  # go/go.mod requires github.com/tabnas/transduce/go v0.1.0, which is
+  # not tagged. polyglot-ci builds a sibling from its checkout, but it
+  # cannot get past one that is unpublished:
+  #
+  #   ts  It runs `npm i` in each package FIRST and only then links the
+  #       sibling checkouts over what npm installed ("only substitute
+  #       what npm actually installed"). `npm i` here asks the registry
+  #       for @tabnas/transduce, gets a 404 and fails, so nothing in ts/
+  #       is built or tested.
+  #   go  The build and the tests run in a go.work over the checkouts,
+  #       which resolves transduce. The "Build from go.mod (GOWORK=off)"
+  #       step between them does not: it fails with "unknown revision
+  #       go/v0.1.0", which polyglot-ci itself calls the normal reading
+  #       mid-release-wave ("Publish the dependency, then re-run"), and
+  #       the Test step after it never runs.
+  #
+  # So those polyglot-ci jobs stay red until transduce is published, and
+  # these two run the same builds and tests meanwhile, on the same
+  # runners, against the same checkouts. The sibling list is read from
+  # `deps:` above, and which siblings are unpublished is asked of the
+  # registry and the module proxy, so neither is a second copy to keep.
+  unpublished-ts:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Use LF line endings
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          path: render
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+        with:
+          node-version: 24.x
+      - name: Clone the tabnas dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          DEPS=$(sed -n 's/^ *deps: "\(.*\)"$/\1/p' render/.github/workflows/ci.yml)
+          [ -n "$DEPS" ] || { echo "::error::no deps: line in ci.yml"; exit 1; }
+          n=0; total=$(echo "$DEPS" | wc -w | tr -d " ")
+          for dep in $DEPS; do
+            n=$((n+1))
+            git clone -q --depth 1 "https://github.com/tabnas/$dep.git" "$dep"
+            echo "clone: $n of $total ($((n*100/total))%) $dep"
+          done
+      # The same loop as polyglot-ci's: install, link the sibling
+      # checkouts over the registry copies, build, dependencies first.
+      # The one difference: a package that declares an unpublished
+      # sibling installs it from the checkout with `npm i --no-save`, so
+      # the registry is never asked for it and package.json is untouched.
+      # Paths stay relative, because on windows $PWD is an MSYS path node
+      # cannot resolve.
+      - name: Build (dependencies, then this repo)
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$PWD"
+          DEPS=$(sed -n 's/^ *deps: "\(.*\)"$/\1/p' render/.github/workflows/ci.yml)
+          name_of() { (cd "$ROOT/$1/ts" && node -p "require('./package.json').name"); }
+          declares() {
+            (cd "$ROOT/$1/ts" && node -p "const p = require('./package.json'); [p.dependencies, p.devDependencies, p.peerDependencies].some((d) => d && d['$2'] !== undefined)")
+          }
+
+          UNPUBLISHED=""
+          for dep in $DEPS; do
+            name=$(name_of "$dep")
+            if npm view "$name" version >/dev/null 2>&1; then
+              echo "on npm:     $name"
+            else
+              echo "not on npm: $name, installed from $dep/ts"
+              UNPUBLISHED="$UNPUBLISHED $dep"
+            fi
+          done
+          if [ -z "$UNPUBLISHED" ]; then
+            echo "::error::every sibling in deps is on npm, so polyglot-ci's ts job covers this one: delete the unpublished-ts job from ci.yml"
+            exit 1
+          fi
+
+          link_siblings() {
+            pkgdir="$1"
+            for dep in $DEPS; do
+              case " $UNPUBLISHED " in *" $dep "*) continue ;; esac
+              [ "$ROOT/$dep/ts" = "$pkgdir" ] && continue
+              name=$(name_of "$dep")
+              target="$pkgdir/node_modules/$name"
+              { [ -e "$target" ] || [ -L "$target" ]; } || continue
+              rm -rf "$target"
+              mkdir -p "$(dirname "$target")"
+              if ! ln -s "$ROOT/$dep/ts" "$target" 2>/dev/null \
+                 || [ ! -f "$target/package.json" ]; then
+                rm -rf "$target"
+                cp -R "$ROOT/$dep/ts" "$target"
+                echo "copied $name <- $dep/ts (symlink unavailable)"
+              elif [ -L "$target" ]; then
+                echo "linked $name -> $dep/ts (was the published copy)"
+              else
+                echo "copied $name <- $dep/ts (ln -s produced a copy)"
+              fi
+            done
+          }
+
+          n=0; ORDER="$DEPS render"; total=$(echo "$ORDER" | wc -w | tr -d " ")
+          for pkg in $ORDER; do
+            n=$((n+1))
+            echo "build: $n of $total ($((n*100/total))%) $pkg"
+            FROM=""
+            for dep in $UNPUBLISHED; do
+              [ "$dep" = "$pkg" ] && continue
+              if [ "$(declares "$pkg" "$(name_of "$dep")")" = true ]; then
+                FROM="$FROM ../../$dep/ts"
+              fi
+            done
+            if [ -n "$FROM" ]; then
+              echo "installing from checkouts:$FROM"
+              ( cd "$pkg/ts" && npm i --no-save $FROM )
+            else
+              ( cd "$pkg/ts" && npm i )
+            fi
+            link_siblings "$ROOT/$pkg/ts"
+            ( cd "$pkg/ts" && npm run build --if-present )
+          done
+      - name: Test
+        shell: bash
+        working-directory: render/ts
+        run: npm test
+
+  unpublished-go:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          path: render
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version: "1.24"
+          # setup-go looks for go.mod at the workspace root, and the
+          # checkout is one level down, so its cache step would only warn.
+          cache: false
+      # Which requirements the proxy does not serve: each
+      # github.com/tabnas/* module go/go.mod requires, at its version.
+      - name: Find the unpublished requirements
+        shell: bash
+        run: |
+          set -euo pipefail
+          MISSING=""
+          for mv in $(go -C render/go mod edit -json | jq -r '.Require[] | select(.Path | startswith("github.com/tabnas/")) | "\(.Path)@\(.Version)"'); do
+            m="${mv%@*}"; v="${mv#*@}"
+            code=$(curl -sS -o /dev/null -w '%{http_code}' "https://proxy.golang.org/$m/@v/$v.info" || true)
+            if [ "$code" = 200 ]; then
+              echo "on the proxy:     $m $v"
+            else
+              echo "not on the proxy: $m $v ($code)"
+              MISSING="$MISSING $m@$v"
+            fi
+          done
+          if [ -z "$MISSING" ]; then
+            echo "::error::every github.com/tabnas requirement in go/go.mod is on the proxy, so polyglot-ci's go job covers this one: delete the unpublished-go job from ci.yml"
+            exit 1
+          fi
+      - name: Clone the tabnas dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          DEPS=$(sed -n 's/^ *deps: "\(.*\)"$/\1/p' render/.github/workflows/ci.yml)
+          [ -n "$DEPS" ] || { echo "::error::no deps: line in ci.yml"; exit 1; }
+          n=0; total=$(echo "$DEPS" | wc -w | tr -d " ")
+          for dep in $DEPS; do
+            n=$((n+1))
+            git clone -q --depth 1 "https://github.com/tabnas/$dep.git" "$dep"
+            echo "clone: $n of $total ($((n*100/total))%) $dep"
+          done
+      # polyglot-ci's workspace step, as it is.
+      - name: Set up go workspace
+        shell: bash
+        run: |
+          set -e
+          for gm in $(find . -name go.mod -not -path '*/vendor/*' -not -path '*/node_modules/*'); do
+            while IFS= read -r line; do
+              [ -n "$line" ] || continue
+              v=$(printf '%s' "$line" | sed -E 's#.*\.\./vendor/([^/]+)/go.*#\1#')
+              dep=$(printf '%s' "$line" | awk '{print $2}' | sed -E 's#github.com/tabnas/([^/]+)/go#\1#')
+              repodir=$(dirname "$(dirname "$gm")")
+              mkdir -p "$repodir/vendor"
+              ln -snf "$(cd "$dep" && pwd)" "$repodir/vendor/$v"
+            done < <(grep -E '^[[:space:]]*replace .*=>[[:space:]]*\.\./vendor/' "$gm" || true)
+          done
+          go work init
+          for gm in $(find . -name go.mod -not -path '*/vendor/*' -not -path '*/node_modules/*'); do
+            grep -qE '^[[:space:]]*replace .*=>[[:space:]]*\.\./vendor/' "$gm" && continue
+            go work use "$(dirname "$gm")"
+          done
+      - name: Build
+        working-directory: render/go
+        run: go build ./...
+      # polyglot-ci's Test step, as it is. Its GOWORK=off step is what
+      # this job stands in for, so it is not repeated here.
+      - name: Test
+        shell: bash
+        working-directory: render
+        run: |
+          set -e
+          for gm in $(find go -name go.mod -not -path '*/vendor/*' | sort); do
+            d="$(dirname "$gm")"
+            echo "==> $d: test"
+            ( cd "$d" && go test -v ./... )
+          done

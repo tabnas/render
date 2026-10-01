@@ -1,22 +1,26 @@
 #!/usr/bin/env bash
 # Rust gate. Kept in one script so local and hosted validation cannot
 # quietly drift apart: .github/workflows/rust.yml runs this file, and so can
-# you. `make test` is the fast inner loop; this is the full gate.
+# you. `make test-rs` is the fast inner loop; this is the full gate.
 #
-# The engine and the grammars are PATH DEPENDENCIES on sibling checkouts
-# (rs/Cargo.toml: `tabnas = { package = "tabnas-parser", path = "../../parser/rs" }` and the like).
-# None is published, so there is no registry version to fall back on.
-# Clone each repository named in SIBLINGS below next to this one before
-# running.
+# The transducer crate, the engine and the grammars are PATH DEPENDENCIES
+# on sibling checkouts (rs/Cargo.toml: `tabnas = { package =
+# "tabnas-parser", path = "../../parser/rs" }` and the like). Each is
+# published on crates.io too, but committed manifests stay path-only
+# (admin ADR-21): the release workflow rewrites the paths into crates.io
+# requirements only when it publishes this crate. The gate builds against
+# the checkouts, not against crates.io, so clone each repository named in
+# SIBLINGS below next to this one before running.
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 
 # Every sibling any crate in the graph takes by path: the ones this crate
-# names (transduce, and for tests json, jsonl, yaml, csv and support) and
-# the ones those name in turn (transduce takes parser and json; jsonl takes json;
-# yaml and csv take jsonic). A dependency's dev-dependencies are not built,
-# so transduce's own test grammars are not needed here.
+# names (transduce and parser, and for tests json, jsonl, yaml, csv and
+# support) and the ones those name in turn (transduce takes parser, json
+# and csv; jsonl takes json; yaml and csv take jsonic). A dependency's
+# dev-dependencies are not built, so transduce's own test grammars are
+# not needed here.
 SIBLINGS="parser json jsonl jsonic yaml csv transduce support"
 
 for SIBLING in $SIBLINGS; do

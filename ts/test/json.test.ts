@@ -268,6 +268,8 @@ describe('JSON: protocol errors', () => {
 
   it('an event the protocol does not define is a protocol error', () => {
     protocolError([{ type: 'comment' } as any])
+    protocolError([undefined as any])
+    protocolError([null as any])
     protocolError([AS, { type: 'string', value: 1 } as any])
     protocolError([OS, { type: 'key', key: 1 } as any])
   })

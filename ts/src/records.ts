@@ -95,7 +95,7 @@ export class RecordsToJson<S extends Sink = Sink> implements TableSink {
   }
 
   tableEvent(ev: TableEvent): Flow {
-    switch (ev.type) {
+    switch (ev?.type) {
       case 'schema':
         return this.schema(ev.columns)
       case 'row':

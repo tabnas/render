@@ -157,7 +157,7 @@ export class CsvRenderer<O extends TextOut = TextOut> implements TableSink {
   }
 
   tableEvent(ev: TableEvent): Flow {
-    switch (ev.type) {
+    switch (ev?.type) {
       case 'schema':
         this.schema(ev.columns)
         break

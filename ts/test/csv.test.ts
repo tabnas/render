@@ -283,8 +283,12 @@ describe('CSV: the protocol', () => {
   it('an event or a cell the protocol does not define is a protocol error', () => {
     const r = new CsvRenderer(new StringOut())
     fails('PROTOCOL_ORDER_ERROR', () => r.tableEvent({ type: 'rows' } as any))
+    fails('PROTOCOL_ORDER_ERROR', () => r.tableEvent(undefined as any))
+    fails('PROTOCOL_ORDER_ERROR', () => r.tableEvent(null as any))
     r.tableEvent(schema(['a']))
     fails('PROTOCOL_ORDER_ERROR', () => r.tableEvent(row([{ type: 'date' } as any])))
+    fails('PROTOCOL_ORDER_ERROR', () => r.tableEvent(row([undefined as any])))
+    fails('PROTOCOL_ORDER_ERROR', () => r.tableEvent(row([null as any])))
     fails('PROTOCOL_ORDER_ERROR', () => r.tableEvent(row([{ type: 'string', value: 1 } as any])))
     assert.equal(r.intoInner().asStr(), '"a"\r\n')
   })

@@ -1,22 +1,38 @@
-# The Rust gate: ci/rust/run.sh, with the sibling checkouts it needs.
-#
-# Runs on every branch push and on pull requests. `branches` is set
-# explicitly so a tag push does not run the gate on a ref where the path
-# filters mean nothing.
+# The Rust gate. Standalone rather than an arm of ci.yml, because ci.yml
+# calls the org-shared polyglot workflow and that takes no Rust input:
+# this file needs no change in tabnas/.github.
 name: Rust
 
+# Runs on EVERY branch push, not just main, and the path lists are
+# written out twice.
+#
+# Both are deliberate: GitHub Actions has no YAML anchors, so a version
+# sharing one list between the two triggers does not run at all; and
+# restricting `push` to main while leaning on `pull_request` leaves a
+# gate that reaches a pull request green because it never executed.
+#
+# The lists name everything the gate READS: the crate, the shared
+# fixtures, the README (its Rust example is a doctest, through
+# rs/src/lib.rs), and the script itself.
 on:
+  # `branches` is set explicitly. A `push` trigger that names neither
+  # branches nor tags also matches TAG pushes, and Actions does not
+  # evaluate `paths` for a tag ref -- so without this, release.yml
+  # pushing `ts/v…` and `go/v…` would run this whole gate once per tag,
+  # on a ref where the path filters mean nothing.
   push:
     branches: [ '**' ]
     paths:
       - 'rs/**'
       - 'test/spec/**'
+      - 'README.md'
       - 'ci/rust/**'
       - '.github/workflows/rust.yml'
   pull_request:
     paths:
       - 'rs/**'
       - 'test/spec/**'
+      - 'README.md'
       - 'ci/rust/**'
       - '.github/workflows/rust.yml'
   workflow_dispatch:
@@ -28,38 +44,56 @@ jobs:
   rust:
     runs-on: ubuntu-latest
     steps:
-      # Checked out into a NAMED directory: rs/Cargo.toml takes the engine
-      # and the grammars as `path = "../../<sibling>/rs"`, which resolves
-      # relative to rs/, so the siblings sit beside this checkout.
+      # Checked out into a NAMED directory. rs/Cargo.toml takes the
+      # transducer crate, the engine, the test grammars and the support
+      # crate as `path = "../../<sibling>/rs"`, resolved relative to rs/,
+      # so the siblings have to sit beside this checkout rather than
+      # inside it. A bare `actions/checkout` into the workspace root
+      # leaves nowhere for them to go.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           path: render
 
-      # A sibling is taken from the branch of the same name when it has one,
-      # else from main: cross-repository work lands on same-named branches
-      # in each repo, and a pull request here can then be gated against the
-      # sibling changes it needs before they merge.
-      - name: Check out the sibling crates
+      # Sibling main, not a release: the committed manifest names the
+      # siblings by path (admin ADR-21), so this is the only resolution
+      # there is. It is also the one ci.yml uses for TypeScript and Go,
+      # so all three runtimes are measured against the same siblings.
+      #
+      # The list is read from ci/rust/run.sh, which names every sibling
+      # any crate in the graph takes by path and refuses to run without
+      # them, so the two cannot disagree.
+      - name: Clone the sibling crates
         run: |
           set -euo pipefail
-          BRANCH="${{ github.head_ref || github.ref_name }}"
           SIBLINGS=$(sed -n 's/^SIBLINGS="\(.*\)"$/\1/p' render/ci/rust/run.sh)
-          n=0; total=$(echo "$SIBLINGS" | wc -w)
+          [ -n "$SIBLINGS" ] || { echo "::error::no SIBLINGS line in ci/rust/run.sh"; exit 1; }
+          n=0; total=$(echo "$SIBLINGS" | wc -w | tr -d " ")
           for s in $SIBLINGS; do
             n=$((n+1))
-            if git clone -q --depth 1 --branch "$BRANCH" "https://github.com/tabnas/$s" "$s" 2>/dev/null; then
-              echo "siblings: $n of $total ($((n*100/total))%) $s @ $BRANCH"
-            else
-              git clone -q --depth 1 "https://github.com/tabnas/$s" "$s"
-              echo "siblings: $n of $total ($((n*100/total))%) $s @ main"
-            fi
+            git clone -q --depth 1 "https://github.com/tabnas/$s.git" "$s"
+            echo "siblings: $n of $total ($((n*100/total))%) $s"
           done
 
-      - name: Install the MSRV toolchain
+      # Pinned to the MSRV in rs/Cargo.toml rather than to `stable`, so
+      # this fails on a change that needs a newer compiler instead of
+      # passing here and breaking for anyone honouring rust-version.
+      # rustup, NOT dtolnay/rust-toolchain: these repos allow only
+      # GitHub-owned and verified-creator actions (allowed_actions:
+      # selected, patterns_allowed: []), so that action is refused before
+      # any job starts -- the run reports startup_failure, which reads as
+      # a broken workflow file rather than a blocked action. The runners
+      # ship rustup, so the action was buying nothing here.
+      #
+      # `default` is what makes the MSRV the toolchain the gate runs
+      # under; installing it alone leaves cargo on the runner's
+      # pre-installed stable.
+      - name: Set up Rust MSRV
         run: |
           MSRV=$(awk -F'"' '/^rust-version = /{print $2; exit}' render/rs/Cargo.toml)
           rustup toolchain install "$MSRV" --profile minimal --component rustfmt,clippy
           rustup default "$MSRV"
 
-      - name: Gate
+      # Everything lives in the script so this file and a contributor's
+      # local run cannot say different things.
+      - name: Rust gate
         run: render/ci/rust/run.sh

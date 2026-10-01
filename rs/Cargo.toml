@@ -8,6 +8,7 @@ description = "Renderers for the tabnas transducer protocols: incremental CSV an
 license = "MIT"
 repository = "https://github.com/tabnas/render"
 readme = "README.md"
+include = ["src/**", "README.md", "LICENSE"]
 keywords = ["csv", "json", "streaming", "renderer", "parser"]
 categories = ["encoding", "text-processing"]
 
@@ -17,7 +18,11 @@ path = "src/lib.rs"
 
 [dependencies]
 # Sibling checkouts, the standard tabnas development model: the transducer
-# protocols this crate renders, and the engine they are built on.
+# protocols this crate renders, and the engine they are built on. Each is
+# published on crates.io too, and the release workflow rewrites these
+# paths into requirements on their newest versions when it publishes this
+# crate (admin ADR-21). The engine's crate is tabnas-parser; it keeps the
+# `tabnas` name here.
 tabnas-transduce = { path = "../../transduce/rs" }
 tabnas = { package = "tabnas-parser", path = "../../parser/rs" }
 
