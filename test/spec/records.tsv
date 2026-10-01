@@ -1,0 +1,43 @@
+events	options	expected
+# RecordsToJson: TableRows/1 in, through RecordsToJson and a compact JSON
+# renderer, the JSON text out.
+#
+#   events    the table events, encoded as in csv.tsv (read RAW).
+#   options   JSON object, read RAW; empty is {}. missing: "skip" (the
+#             default), "null" or "error".
+#   expected  the exact text through the escape codec, or ERROR:<CODE>.
+#
+# One object per row, members in schema order, keys the labels.
+[{"schema":["id","name","ok"]},{"row":[{"num":"1.0"},"ada",true]},{"row":[{"value":"2"},null,false]},"end"]	{}	[{"id":1.0,"name":"ada","ok":true},{"id":2,"name":null,"ok":false}]
+[{"schema":["name","age"]},{"row":["ada",{"num":"36"}]},{"row":["lin",{"missing":true}]},"end"]	{}	[{"name":"ada","age":36},{"name":"lin"}]
+[{"schema":["a"]},"end"]	{}	[]
+[{"schema":[]},{"row":[]},{"row":[]},"end"]	{}	[{},{}]
+[{"schema":["k\"\n"]},{"row":["é🚀"]},"end"]	{}	[{"k\\"\\n":"é🚀"}]
+# Missing: skipped (default), null, or MISSING_VALUE.
+[{"schema":["a","b"]},{"row":[{"missing":true},"x"]},"end"]	{}	[{"b":"x"}]
+[{"schema":["a","b"]},{"row":[{"missing":true},"x"]},"end"]	{"missing":"skip"}	[{"b":"x"}]
+[{"schema":["a","b"]},{"row":[{"missing":true},"x"]},"end"]	{"missing":"null"}	[{"a":null,"b":"x"}]
+[{"schema":["a","b"]},{"row":["x",{"missing":true}]},"end"]	{"missing":"error"}	ERROR:MISSING_VALUE
+[{"schema":["a","b"]},{"row":[{"missing":true},{"missing":true}]},"end"]	{}	[{}]
+# A repeated label appears once per record, from the last column whose cell
+# contributes a member (a skipped Missing contributes none), in that
+# column's position.
+[{"schema":["a","b","a"]},{"row":["1","2","3"]},{"row":["4","5",{"missing":true}]},{"row":[{"missing":true},"6",{"missing":true}]},"end"]	{}	[{"b":"2","a":"3"},{"a":"4","b":"5"},{"b":"6"}]
+[{"schema":["a","b","a"]},{"row":["4","5",{"missing":true}]},"end"]	{"missing":"null"}	[{"b":"5","a":null}]
+[{"schema":["a","a","a"]},{"row":["1","2",{"missing":true}]},"end"]	{}	[{"a":"2"}]
+[{"schema":["a","a"]},{"row":["1","2"]},"end"]	{"missing":"error"}	[{"a":"2"}]
+# Numbers are the JSON renderer's: an invalid lexeme or a non-finite value fails there.
+[{"schema":["n"]},{"row":[{"num":"01"}]},"end"]	{}	ERROR:INVALID_NUMBER
+[{"schema":["n"]},{"row":[{"value":"NaN"}]},"end"]	{}	ERROR:TARGET_VALUE_UNREPRESENTABLE
+[{"schema":["n"]},{"row":[{"value":"1e21"}]},"end"]	{}	[{"n":1e21}]
+# Protocol order, as the CSV renderer's; zero columns is allowed.
+[{"row":["x"]}]	{}	ERROR:PROTOCOL_ORDER_ERROR
+["end"]	{}	ERROR:PROTOCOL_ORDER_ERROR
+[{"schema":["a"]},{"schema":["a"]}]	{}	ERROR:PROTOCOL_ORDER_ERROR
+[{"schema":["a"]},{"row":["x","y"]}]	{}	ERROR:PROTOCOL_ORDER_ERROR
+[{"schema":["a"]},{"row":[]}]	{}	ERROR:PROTOCOL_ORDER_ERROR
+[{"schema":["a"]},"end","end"]	{}	ERROR:PROTOCOL_ORDER_ERROR
+[{"schema":["a"]},"end",{"row":["x"]}]	{}	ERROR:PROTOCOL_ORDER_ERROR
+[{"schema":["a"]},"end",{"schema":["a"]}]	{}	ERROR:PROTOCOL_ORDER_ERROR
+# Without an end the text so far is the output.
+[{"schema":["a"]},{"row":["x"]}]	{}	[{"a":"x"}

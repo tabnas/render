@@ -75,12 +75,22 @@ standard transducer to be the only one.
 | `rs/tests/csv_readback.rs` | rendered CSV read back with the `csv` crate |
 | `rs/tests/json_readback.rs` | rendered JSON read back with serde_json, for every fixture in `rs/tests/fixtures/` (copied from aless) |
 | `rs/benches/render.rs` | end to end: JSON text → `ParserSource` → `TableFromJson` → `CsvRenderer` (the brief's JSON→CSV throughput), and the same chain from a parsed value; renderer only: table events → CSV (rows/s, bytes/s), parsed value → `ValueSource` → JSON |
+| `test/spec/*.tsv` | the shared fixtures every runtime runs: `csv`, `json`, `number`, `records`, `text`; the encodings are in `docs/reference.md`, "Shared fixtures" |
+| `rs/tests/spec_*.rs` | the Rust runners of those fixtures, on `tabnas_support::Runner`; `spec_fixtures.rs` fails when a fixture has no runner |
+| `DIVERGENCE.md` | where a runtime differs from the others, and the Rust-only tests that stay out of the shared files |
 | `docs/reference.md` | options, contracts, codes raised, decisions taken, measurements |
 | `ci/rust/run.sh` | the gate `.github/workflows/rust.yml` runs |
 
+The shared fixtures in `test/spec/` pin, as data every runtime runs, the
+CSV and JSON output, number formatting, `RecordsToJson` and the text
+algebra (coalescing, the output limit in UTF-8 bytes, `Join`, `Concat`,
+`ReplaceText`). A behaviour expressible as events in and text (or a code)
+out belongs in a row there; a port reproduces every row, and records what
+it cannot in `DIVERGENCE.md`.
+
 Chunk-boundary tests (coalescing at the budget, the limit failing before
 the write, joins with empty items, replacements split at every byte of the
-literal) live beside the code in `rs/src/text.rs`; every Appendix A CSV
+literal) also live beside the code in `rs/src/text.rs`; every Appendix A CSV
 case asserts exact bytes in `rs/src/csv.rs`; every JSON protocol error is
 in `rs/src/json.rs`.
 

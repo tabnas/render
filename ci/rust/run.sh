@@ -13,11 +13,11 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 
 # Every sibling any crate in the graph takes by path: the ones this crate
-# names (transduce, and for tests json, jsonl, yaml and csv) and the ones
-# those name in turn (transduce takes parser and json; jsonl takes json;
+# names (transduce, and for tests json, jsonl, yaml, csv and support) and
+# the ones those name in turn (transduce takes parser and json; jsonl takes json;
 # yaml and csv take jsonic). A dependency's dev-dependencies are not built,
 # so transduce's own test grammars are not needed here.
-SIBLINGS="parser json jsonl jsonic yaml csv transduce"
+SIBLINGS="parser json jsonl jsonic yaml csv transduce support"
 
 for SIBLING in $SIBLINGS; do
   if [[ ! -f "$ROOT/../$SIBLING/rs/Cargo.toml" ]]; then

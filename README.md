@@ -67,6 +67,7 @@ table as an array of objects.
 | Path | What it is |
 |---|---|
 | [`rs/`](rs/) | the `tabnas-render` crate (library `tabnas_render`) |
+| [`test/spec/`](test/spec/) | the shared fixtures every runtime runs; [`DIVERGENCE.md`](DIVERGENCE.md) records where a runtime differs |
 | [`docs/reference.md`](docs/reference.md) | the options, the contracts, the codes raised and the decisions taken; the design lives in transduce's `docs/architecture.md`, section 3 |
 | [`ci/rust/run.sh`](ci/rust/run.sh) | the gate CI runs |
 

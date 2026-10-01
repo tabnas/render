@@ -417,8 +417,16 @@ dependencies = [
  "tabnas-json",
  "tabnas-jsonl",
  "tabnas-parser",
+ "tabnas-support",
  "tabnas-transduce",
  "tabnas-yaml",
+]
+
+[[package]]
+name = "tabnas-support"
+version = "0.3.5"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]
