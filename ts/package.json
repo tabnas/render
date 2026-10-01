@@ -39,6 +39,7 @@
   "devDependencies": {
     "@tabnas/csv": "*",
     "@tabnas/json": "*",
+    "@tabnas/jsonic": "*",
     "@tabnas/jsonl": "*",
     "@tabnas/parser": "*",
     "@tabnas/support": "*",

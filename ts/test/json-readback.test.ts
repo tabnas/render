@@ -13,7 +13,7 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert'
 import { readFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 
 import { Tabnas } from '@tabnas/parser'
 import { make as makeJson } from '@tabnas/json'
@@ -24,11 +24,9 @@ import { ValueSource } from '@tabnas/transduce'
 
 import { JsonOptions, JsonRenderer, StringOut } from '../dist/render'
 
-// The YAML grammar is a plugin over the jsonic base grammar, its peer
-// dependency (npm installs a peer with the package). It is reached through
-// @tabnas/yaml's own resolution, the one the plugin itself uses, rather
-// than declared again here.
-const { jsonic } = require(require.resolve('@tabnas/jsonic', { paths: [dirname(require.resolve('@tabnas/yaml'))] }))
+// The YAML grammar is a plugin over the jsonic base grammar, a declared
+// dev-dependency here as it is a peer of @tabnas/yaml.
+import { jsonic } from '@tabnas/jsonic'
 
 function fixture(name: string): string {
   return readFileSync(join(__dirname, '..', '..', 'rs', 'tests', 'fixtures', name), 'utf8')
