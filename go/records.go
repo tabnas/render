@@ -165,7 +165,7 @@ func (r *RecordsToJSON[S]) row(cells []tt.Cell) (tt.Flow, *tt.Fail) {
 		case tt.CellBool:
 			value = tt.EvBool(cell.Bool)
 		case tt.CellNumber:
-			value = tt.EvNumberLexeme(cell.Value, cell.Lexeme)
+			value = tt.Event{Kind: tt.Number, HasLexeme: cell.HasLexeme, Value: cell.Value, Lexeme: cell.Lexeme}
 		case tt.CellString:
 			value = tt.EvString(cell.Text)
 		case tt.CellMissing:

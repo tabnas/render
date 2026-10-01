@@ -46,10 +46,10 @@ var hazardLabels = L("plain", "empty", "comma", "quote", "breaks", "unicode", "n
 func hazards() ([][]tt.Cell, [][]string) {
 	rows := [][]tt.Cell{
 		R(s("ada"), s(""), s("x, y"), s(`say "hi"`), s("a\r\nb\nc\rd"), s("héllo 日本語 🚀"),
-			tt.Cell{Kind: tt.CellNumber, Value: 50.25, Lexeme: "50.250"}, boolean(true)),
+			tt.Cell{Kind: tt.CellNumber, HasLexeme: true, Value: 50.25, Lexeme: "50.250"}, boolean(true)),
 		R(s(`"`), null, s(","), s(`""`), s("\n"), s("→"), val(0), boolean(false)),
 		R(missing, s(" "), s(",,"), s(`a"b`), s("\r"), s("ß"),
-			tt.Cell{Kind: tt.CellNumber, Value: -1.5e300, Lexeme: "-1.5E+300"}, boolean(true)),
+			tt.Cell{Kind: tt.CellNumber, HasLexeme: true, Value: -1.5e300, Lexeme: "-1.5E+300"}, boolean(true)),
 	}
 	expected := [][]string{
 		{"ada", "", "x, y", `say "hi"`, "a\r\nb\nc\rd", "héllo 日本語 🚀", "50.250", "true"},

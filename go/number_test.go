@@ -32,37 +32,38 @@ func TestTheJSONNumberGrammarIsExact(t *testing.T) {
 
 func TestAJSONNumberLexemeBesideAFiniteValuePasses(t *testing.T) {
 	for _, c := range []struct {
-		v float64
-		l string
-	}{{1, "1.00"}, {1, ""}, {1e30, "123456789012345678901234567890"}} {
-		if f := checkNumber(c.v, c.l); f != nil {
-			t.Errorf("%v %q: %v", c.v, c.l, f)
+		v   float64
+		l   string
+		has bool
+	}{{1, "1.00", true}, {1, "", false}, {1e30, "123456789012345678901234567890", true}} {
+		if f := checkNumber(c.v, c.l, c.has); f != nil {
+			t.Errorf("%v %q %v: %v", c.v, c.l, c.has, f)
 		}
 	}
 }
 
 func TestALexemeThatIsNotAJSONNumberIsInvalidNumber(t *testing.T) {
-	if f := checkNumber(1, "1."); f == nil || f.Code != tt.CodeInvalidNumber {
+	if f := checkNumber(1, "1.", true); f == nil || f.Code != tt.CodeInvalidNumber {
 		t.Errorf("1.: %v", f)
 	}
 	// The lexeme is judged first: a NaN spelled "NaN" is a bad lexeme, not
 	// an unrepresentable value.
-	if f := checkNumber(math.NaN(), "NaN"); f == nil || f.Code != tt.CodeInvalidNumber {
+	if f := checkNumber(math.NaN(), "NaN", true); f == nil || f.Code != tt.CodeInvalidNumber {
 		t.Errorf("NaN: %v", f)
 	}
 }
 
 func TestANonFiniteValueIsUnrepresentableWithOrWithoutALexeme(t *testing.T) {
 	for _, v := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
-		if f := checkNumber(v, ""); f == nil || f.Code != tt.CodeTargetValueUnrepresentable {
+		if f := checkNumber(v, "", false); f == nil || f.Code != tt.CodeTargetValueUnrepresentable {
 			t.Errorf("%v: %v", v, f)
 		}
 	}
-	f := checkNumber(math.Inf(1), "1e999")
+	f := checkNumber(math.Inf(1), "1e999", true)
 	if f == nil || f.Code != tt.CodeTargetValueUnrepresentable || !strings.Contains(f.Message, `"1e999"`) {
 		t.Errorf("1e999: %v", f)
 	}
-	if f := checkNumber(math.Inf(-1), "-1e999"); f == nil || f.Code != tt.CodeTargetValueUnrepresentable {
+	if f := checkNumber(math.Inf(-1), "-1e999", true); f == nil || f.Code != tt.CodeTargetValueUnrepresentable {
 		t.Errorf("-1e999: %v", f)
 	}
 }

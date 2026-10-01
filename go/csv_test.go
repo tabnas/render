@@ -31,7 +31,7 @@ func num(lexeme string) tt.Cell {
 	if err != nil && !errors.Is(err, strconv.ErrRange) {
 		v = 0
 	}
-	return tt.Cell{Kind: tt.CellNumber, Value: v, Lexeme: lexeme}
+	return tt.Cell{Kind: tt.CellNumber, HasLexeme: true, Value: v, Lexeme: lexeme}
 }
 
 func val(v float64) tt.Cell { return tt.Cell{Kind: tt.CellNumber, Value: v} }
@@ -129,9 +129,7 @@ func TestBigLexemesAreWrittenVerbatim(t *testing.T) {
 }
 
 func TestCSVALexemeThatIsNotAJSONNumberIsInvalidNumber(t *testing.T) {
-	// Rust's list also has "": an empty lexeme is no lexeme in
-	// transduce's Go types (see DIVERGENCE.md), so it is not here.
-	for _, bad := range []string{"1.", "01", "NaN", "0x10", "1_000"} {
+	for _, bad := range []string{"1.", "01", "NaN", "0x10", "1_000", ""} {
 		_, f := renderCSV(DefaultCSVOptions(), L("a"), R(num(bad)))
 		code(t, f, tt.CodeInvalidNumber)
 		eq(t, f.CommittedOutput, true, "the header was already written: "+bad)
@@ -148,7 +146,7 @@ func TestNaNAndInfinityAreUnrepresentableWithOrWithoutALexeme(t *testing.T) {
 	r, f := NewCSVRenderer(NewStringOut(), DefaultCSVOptions())
 	ok(t, f)
 	ok(t, tableEv(t, r, schemaEv("a", "b")))
-	f = code(t, tableEv(t, r, rowEv(s("x"), tt.Cell{Kind: tt.CellNumber, Value: math.Inf(1), Lexeme: "1e999"})),
+	f = code(t, tableEv(t, r, rowEv(s("x"), tt.Cell{Kind: tt.CellNumber, HasLexeme: true, Value: math.Inf(1), Lexeme: "1e999"})),
 		tt.CodeTargetValueUnrepresentable)
 	eq(t, f.Path, `column "b", row 1`, "path")
 	eq(t, r.Inner().String(), "\"a\",\"b\"\r\n", "text")

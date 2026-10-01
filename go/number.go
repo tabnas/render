@@ -68,24 +68,21 @@ func IsJSONNumber(text string) bool {
 	return i == n
 }
 
-// checkNumber reports whether a renderer may write this number at all.
+// checkNumber reports whether a renderer may write this number at all:
+// its value, and its lexeme when hasLexeme says it has one (an event's or
+// a cell's HasLexeme).
 //
-// A lexeme that is not a JSON number is INVALID_NUMBER. A value that is
-// not finite is TARGET_VALUE_UNREPRESENTABLE, with or without a lexeme.
-// Nothing is formatted here, so a renderer can run this over a whole row
-// before writing a byte of it.
-//
-// transduce's Go types carry "no lexeme" as the empty string, so an empty
-// lexeme is no lexeme here: the one place this runtime differs from the
-// Rust crate, where Some("") is a lexeme and INVALID_NUMBER (see
-// DIVERGENCE.md).
-func checkNumber(value float64, lexeme string) *tt.Fail {
-	if lexeme != "" && !IsJSONNumber(lexeme) {
+// A lexeme that is not a JSON number is INVALID_NUMBER, the empty lexeme
+// included. A value that is not finite is TARGET_VALUE_UNREPRESENTABLE,
+// with or without a lexeme. Nothing is formatted here, so a renderer can
+// run this over a whole row before writing a byte of it.
+func checkNumber(value float64, lexeme string, hasLexeme bool) *tt.Fail {
+	if hasLexeme && !IsJSONNumber(lexeme) {
 		return tt.NewFail(tt.CodeInvalidNumber, fmt.Sprintf("%s is not a JSON number", strconv.Quote(lexeme)))
 	}
 	if math.IsNaN(value) || math.IsInf(value, 0) {
 		var message string
-		if lexeme != "" {
+		if hasLexeme {
 			message = fmt.Sprintf("%s is %s as a number, which has no representation", strconv.Quote(lexeme), nonFinite(value))
 		} else {
 			message = fmt.Sprintf("%s has no representation as a number", nonFinite(value))

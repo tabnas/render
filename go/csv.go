@@ -219,7 +219,7 @@ func (r *CSVRenderer[O]) row(cells []tt.Cell) *tt.Fail {
 		case tt.CellNumber:
 			// check passed the row: the lexeme is a JSON number and the
 			// value is finite, so this pass only formats, once.
-			if cell.Lexeme != "" {
+			if cell.HasLexeme {
 				text = cell.Lexeme
 			} else {
 				r.scratch = appendValue(r.scratch[:0], cell.Value)
@@ -255,7 +255,7 @@ func (r *CSVRenderer[O]) check(cells []tt.Cell) *tt.Fail {
 		cell := &cells[i]
 		switch cell.Kind {
 		case tt.CellNumber:
-			if f := checkNumber(cell.Value, cell.Lexeme); f != nil {
+			if f := checkNumber(cell.Value, cell.Lexeme, cell.HasLexeme); f != nil {
 				return f.AtPath(fmt.Sprintf("column %s, row %d", strconv.Quote(r.labels[i]), r.rows+1))
 			}
 		case tt.CellMissing:

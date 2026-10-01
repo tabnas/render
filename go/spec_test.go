@@ -11,9 +11,9 @@ package tabnasrender
 // follow the encodings fails the row loudly as malformed; it never
 // becomes a code a row could match.
 //
-// Every row runs, except the rows specDivergences lists, each skipped by
-// name with its reason: a measured difference between this runtime and
-// Rust, recorded for DIVERGENCE.md.
+// Every row runs, except the rows specDivergences lists (none today), each
+// skipped by name with its reason: a measured difference between this
+// runtime and Rust, recorded for DIVERGENCE.md.
 
 import (
 	"encoding/json"
@@ -35,22 +35,10 @@ import (
 // unread.
 var specFixtures = []string{"csv.tsv", "json.tsv", "number.tsv", "records.tsv", "text.tsv"}
 
-// emptyLexeme is why the rows with an empty lexeme diverge.
-const emptyLexeme = "transduce's Go types carry a number's lexeme as a string with \"\" meaning " +
-	"none (Event.Lexeme, Cell.Lexeme), so the empty lexeme {\"num\":\"\"} cannot be told from " +
-	"no lexeme: Go writes the value (0) where Rust's Some(\"\") is INVALID_NUMBER. The repair " +
-	"belongs in transduce's Go types (a has-lexeme flag), not here"
-
 // specDivergences is the rows this runtime does not reproduce, by file and
-// then by the input column as written in the fixture, and why.
-var specDivergences = map[string]map[string]string{
-	"csv.tsv": {
-		`[{"schema":["a"]},{"row":[{"num":""}]},"end"]`: emptyLexeme,
-	},
-	"number.tsv": {
-		`{"num":""}`: emptyLexeme,
-	},
-}
+// then by the input column as written in the fixture, and why. There are
+// none: every row of every fixture runs.
+var specDivergences = map[string]map[string]string{}
 
 // rowFailure is a failure as the shared runner sees it: the code is the
 // contract, the whole failure goes in the report.
@@ -242,10 +230,11 @@ func parseValue(s string) float64 {
 	return 0
 }
 
-// number is a number object: {"num": lexeme}, {"value": value}, or both.
-// With a lexeme and no value, the value is the lexeme read as a decimal
-// when it is a JSON number (overflowing to infinity, as 1e999 does) and 0
-// when it is not.
+// number is a number object: {"num": lexeme}, {"value": value}, or both;
+// the bool says whether it has a lexeme, so {"num": ""} is the empty
+// lexeme, not none. With a lexeme and no value, the value is the lexeme
+// read as a decimal when it is a JSON number (overflowing to infinity, as
+// 1e999 does) and 0 when it is not.
 func number(o map[string]any) (float64, string, bool) {
 	object(o, "number", "num", "value")
 	field := func(k string) (string, bool) {
@@ -287,8 +276,8 @@ func cell(v any) tt.Cell {
 		if m, ok := c["missing"]; ok && len(c) == 1 && m == true {
 			return tt.Cell{Kind: tt.CellMissing}
 		}
-		value, lexeme, _ := number(c)
-		return tt.Cell{Kind: tt.CellNumber, Value: value, Lexeme: lexeme}
+		value, lexeme, hasLexeme := number(c)
+		return tt.Cell{Kind: tt.CellNumber, HasLexeme: hasLexeme, Value: value, Lexeme: lexeme}
 	}
 	badCell("%v is not a cell", v)
 	return tt.Cell{}
@@ -368,8 +357,8 @@ func jsonEvents(v any) []tt.Event {
 			} else if s, ok := it["str"]; ok && len(it) == 1 {
 				out = append(out, tt.EvString(text(s)))
 			} else {
-				value, lexeme, _ := number(it)
-				out = append(out, tt.EvNumberLexeme(value, lexeme))
+				value, lexeme, hasLexeme := number(it)
+				out = append(out, tt.Event{Kind: tt.Number, HasLexeme: hasLexeme, Value: value, Lexeme: lexeme})
 			}
 		default:
 			badCell("%v is not a JSON event", item)
@@ -486,15 +475,16 @@ func TestSpecJSON(t *testing.T) {
 	})
 }
 
-func numberThroughJSON(value float64, lexeme string) (string, *tt.Fail) {
+func numberThroughJSON(value float64, lexeme string, hasLexeme bool) (string, *tt.Fail) {
 	r := NewJSONRenderer(NewStringOut(), JSONOptions{})
-	if f := feedJSON(r, []tt.Event{tt.EvNumberLexeme(value, lexeme), tt.EvEnd()}); f != nil {
+	ev := tt.Event{Kind: tt.Number, HasLexeme: hasLexeme, Value: value, Lexeme: lexeme}
+	if f := feedJSON(r, []tt.Event{ev, tt.EvEnd()}); f != nil {
 		return "", f
 	}
 	return r.Inner().String(), nil
 }
 
-func numberThroughCSV(value float64, lexeme string) (string, *tt.Fail) {
+func numberThroughCSV(value float64, lexeme string, hasLexeme bool) (string, *tt.Fail) {
 	options := DefaultCSVOptions()
 	options.Header = false
 	options.Newline = NewlineLF
@@ -505,7 +495,7 @@ func numberThroughCSV(value float64, lexeme string) (string, *tt.Fail) {
 	}
 	if f := feedTable(r, []tt.TableEvent{
 		{Kind: tt.TableSchema, Columns: []tt.PublicColumn{{Label: "n"}}},
-		{Kind: tt.TableRow, Cells: []tt.Cell{{Kind: tt.CellNumber, Value: value, Lexeme: lexeme}}},
+		{Kind: tt.TableRow, Cells: []tt.Cell{{Kind: tt.CellNumber, HasLexeme: hasLexeme, Value: value, Lexeme: lexeme}}},
 		{Kind: tt.TableEnd},
 	}); f != nil {
 		return "", f
@@ -521,9 +511,9 @@ func TestSpecNumber(t *testing.T) {
 		if !ok {
 			badCell("number is a number object")
 		}
-		value, lexeme, _ := number(o)
-		a, fa := numberThroughJSON(value, lexeme)
-		b, fb := numberThroughCSV(value, lexeme)
+		value, lexeme, hasLexeme := number(o)
+		a, fa := numberThroughJSON(value, lexeme, hasLexeme)
+		b, fb := numberThroughCSV(value, lexeme, hasLexeme)
 		switch {
 		case fa == nil && fb == nil && a == b:
 			return a, nil

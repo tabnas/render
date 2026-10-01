@@ -17,7 +17,7 @@ func show(events []tt.Event) string {
 	parts := make([]string, len(events))
 	for i, ev := range events {
 		parts[i] = ev.String()
-		if ev.Kind == tt.Number && ev.Lexeme == "" {
+		if ev.Kind == tt.Number && !ev.HasLexeme {
 			parts[i] += "~" // no lexeme
 		}
 	}
@@ -54,7 +54,7 @@ func records(t *testing.T, missing MissingRecord, labels []string, rows ...[]tt.
 
 func TestATableBecomesAnArrayOfObjectsKeyedByLabel(t *testing.T) {
 	eq(t, records(t, MissingSkip, L("id", "name", "ok"),
-		R(tt.Cell{Kind: tt.CellNumber, Value: 1, Lexeme: "1.0"}, s("ada"), boolean(true)),
+		R(tt.Cell{Kind: tt.CellNumber, HasLexeme: true, Value: 1, Lexeme: "1.0"}, s("ada"), boolean(true)),
 		R(val(2), null, boolean(false))),
 		`[ { key "id" 1.0 key "name" "ada" key "ok" true } { key "id" 2~ key "name" null key "ok" false } ] end`, "events")
 }

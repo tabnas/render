@@ -137,7 +137,7 @@ func (r *JSONRenderer[O]) putString(s string) *tt.Fail {
 // putNumber writes a number checkNumber has passed: the lexeme as it is,
 // or the value formatted once into the reused scratch buffer.
 func (r *JSONRenderer[O]) putNumber(ev tt.Event) *tt.Fail {
-	if ev.Lexeme != "" {
+	if ev.HasLexeme {
 		return r.put(ev.Lexeme)
 	}
 	r.scratch = appendValue(r.scratch[:0], ev.Value)
@@ -312,7 +312,7 @@ func (r *JSONRenderer[O]) scalar(ev tt.Event) *tt.Fail {
 	// nothing behind, or a caller that carries on after the failure would
 	// find `[1,,2]` in the output.
 	if ev.Kind == tt.Number {
-		if f := checkNumber(ev.Value, ev.Lexeme); f != nil {
+		if f := checkNumber(ev.Value, ev.Lexeme, ev.HasLexeme); f != nil {
 			return r.fail(f)
 		}
 	}
