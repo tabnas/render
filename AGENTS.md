@@ -140,3 +140,4 @@ spreadsheet-export policy, which this crate does not yet provide and never
 hides inside generic quoting. Output size is bounded by
 `max_output_bytes` when the caller sets it. Nothing here reads files,
 opens connections or evaluates code.
+> **Naming:** Always spell the project name `tabnas`, all lowercase, including in prose and headings. Never write `TabNAS`.
