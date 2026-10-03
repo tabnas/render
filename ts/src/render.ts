@@ -28,7 +28,7 @@
 // the transducer calls, and a slow writer slows the parse.
 
 // This package's version, as package.json declares it.
-export const VERSION = '0.1.0'
+export const VERSION = '0.1.1'
 
 export { CsvOptions, CsvRenderer, MissingText, Newline } from './csv'
 export type { Quoting } from './csv'

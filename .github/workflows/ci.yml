@@ -1,0 +1,16 @@
+# CI caller — the org-standard polyglot workflow for a ts/ + go/ repository.
+# Live. Change it here, in a reviewed pull request: session credentials
+# can push .github/workflows/* (admin DECISIONS.md ADR-8, as amended
+# 2026-09-24). rust.yml runs the Rust gate (ci/rust/run.sh) separately.
+name: ci
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  ci:
+    uses: tabnas/.github/.github/workflows/polyglot-ci.yml@main
+    with:
+      deps: "parser support json jsonic csv jsonl yaml transduce"
