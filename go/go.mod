@@ -6,7 +6,7 @@ go 1.24.7
 // released: resolved through a go.work over the sibling checkout until it
 // is), and the engine they are built on.
 require (
-	github.com/tabnas/parser/go v0.12.8
+	github.com/tabnas/parser/go v0.12.9
 	github.com/tabnas/transduce/go v0.1.1
 )
 
