@@ -17,27 +17,10 @@
 // ones are: one root value, keys only where a member begins, balanced
 // containers, one end.
 
-import { Fail, Flow, JsonEvent, Sink } from '@tabnas/transduce'
+import { Fail, Flow, JsonEvent, JsonOptions, Sink, TextOut } from '@tabnas/alchemy/shared'
 
 import { checkNumber, writeValue } from './number'
-import { TextOut, hasCommitted } from './text'
-
-// The JSON profile.
-export type JsonOptions = {
-  // Spaces per nesting level, with a newline before every item and every
-  // closing bracket of a non-empty container. `null` or `0` is compact: no
-  // whitespace at all.
-  indent: number | null
-  // Write a newline after the root value, at the end.
-  trailingNewline: boolean
-}
-
-export const JsonOptions = Object.freeze({
-  // Compact, no trailing newline.
-  default(): JsonOptions {
-    return { indent: null, trailingNewline: false }
-  },
-})
+import { hasCommitted } from './text'
 
 type Frame = { object: true; first: boolean; expectingKey: boolean } | { object: false; first: boolean }
 

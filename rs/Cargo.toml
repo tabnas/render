@@ -16,12 +16,17 @@ name = "tabnas_render"
 path = "src/lib.rs"
 
 [dependencies]
-# Sibling checkouts, the standard tabnas development model: the transducer
-# protocols this crate renders, and the engine they are built on.
-tabnas-transduce = { path = "../../transduce/rs" }
+# Sibling checkouts, the standard tabnas development model: the protocols
+# this crate renders, which are alchemy's shared types (its `shared` unit
+# alone, without the language: `default-features = false`), and the
+# engine they are built on.
+tabnas-alchemy = { path = "../../alchemy/rs", default-features = false }
 tabnas = { package = "tabnas-parser", path = "../../parser/rs" }
 
 [dev-dependencies]
+# The sources and the table transducer the tests and the benches feed the
+# renderers from.
+tabnas-transduce = { path = "../../transduce/rs" }
 tabnas-json = { path = "../../json/rs" }
 tabnas-jsonl = { path = "../../jsonl/rs" }
 tabnas-yaml = { path = "../../yaml/rs" }

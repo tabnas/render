@@ -35,9 +35,10 @@
     ".": "./dist/render.js"
   },
   "peerDependencies": {
-    "@tabnas/transduce": ">=0"
+    "@tabnas/alchemy": ">=0"
   },
   "devDependencies": {
+    "@tabnas/alchemy": "*",
     "@tabnas/csv": "*",
     "@tabnas/json": "*",
     "@tabnas/jsonic": "*",

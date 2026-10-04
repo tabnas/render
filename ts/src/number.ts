@@ -18,7 +18,7 @@
 // Validation and formatting are separate functions so a renderer can check
 // a whole row before it writes any of it, and format each number once.
 
-import { Fail } from '@tabnas/transduce'
+import { Fail } from '@tabnas/alchemy/shared'
 
 function isDigit(c: number): boolean {
   return c >= 0x30 && c <= 0x39

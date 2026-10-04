@@ -2,9 +2,15 @@ module github.com/tabnas/render/go
 
 go 1.24.7
 
-// The protocols this package renders (transduce's Go port, not yet
-// released: resolved through a go.work over the sibling checkout until it
-// is), and the engine they are built on.
+// The protocols this package renders, declared in alchemy's shared
+// package. No release of alchemy carries that package yet: a go.work over
+// the sibling checkout resolves it until one does.
+require github.com/tabnas/alchemy/go v0.1.3
+
+// The engine and transduce's Go port, through which the read-back oracles
+// parse a document into events (resolved through a go.work over the
+// sibling checkout until a release of transduce builds on alchemy's shared
+// package).
 require (
 	github.com/tabnas/parser/go v0.12.9
 	github.com/tabnas/transduce/go v0.1.2

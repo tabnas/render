@@ -21,28 +21,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	tt "github.com/tabnas/transduce/go"
+	"github.com/tabnas/alchemy/go/shared"
 )
-
-// TextOut is a consumer of text fragments.
-//
-// Fragments arrive in order and are concatenated; where the boundaries
-// fall carries no meaning. Flush pushes everything held so far to the
-// final destination, and a renderer calls it exactly once, at the end of
-// the protocol it renders, so that a document that failed half way is not
-// flushed as if it were whole.
-//
-// HasCommitted reports whether any text has reached the final
-// destination, so that a failure found now leaves partial output behind.
-// A renderer asks it when it fails and reports CommittedOutput from the
-// answer. An output that cannot tell answers true, the conservative
-// answer (Rust's default method; Go interfaces have none, so every
-// implementation says so itself).
-type TextOut interface {
-	WriteStr(s string) *tt.Fail
-	Flush() *tt.Fail
-	HasCommitted() bool
-}
 
 // DefaultBudget is the default coalescing budget of a WriteOut: large
 // enough that a write per budget is negligible next to the parse, small
@@ -73,7 +53,7 @@ type WriteOut struct {
 	buf            []byte
 	budget         int
 	maxOutputBytes *uint64
-	metrics        *tt.Metrics
+	metrics        *shared.Metrics
 	// accepted is the bytes taken in: buffered or written.
 	accepted uint64
 	// committed is the bytes the writer accepted, counted write by write.
@@ -98,7 +78,7 @@ func (o *WriteOut) WithBudget(budget int) *WriteOut {
 
 // WithLimits enforces limits.MaxOutputBytes; the other limits belong to
 // the stages upstream.
-func (o *WriteOut) WithLimits(limits tt.Limits) *WriteOut {
+func (o *WriteOut) WithLimits(limits shared.Limits) *WriteOut {
 	if limits.MaxOutputBytes != nil {
 		max := *limits.MaxOutputBytes
 		o.maxOutputBytes = &max
@@ -109,7 +89,7 @@ func (o *WriteOut) WithLimits(limits tt.Limits) *WriteOut {
 }
 
 // WithMetrics counts OutputBytes into these metrics.
-func (o *WriteOut) WithMetrics(metrics *tt.Metrics) *WriteOut {
+func (o *WriteOut) WithMetrics(metrics *shared.Metrics) *WriteOut {
 	o.metrics = metrics
 	return o
 }
@@ -128,8 +108,8 @@ func (o *WriteOut) Committed() uint64 { return o.committed }
 // calls Flush first, knowingly. The WriteOut should not be used after.
 func (o *WriteOut) Inner() io.Writer { return o.writer }
 
-func (o *WriteOut) failIO(err error) *tt.Fail {
-	f := tt.OutputFail(fmt.Sprintf("writing the output failed: %v", err))
+func (o *WriteOut) failIO(err error) *shared.Fail {
+	f := shared.OutputFail(fmt.Sprintf("writing the output failed: %v", err))
 	if o.committed > 0 {
 		f.Committed()
 	}
@@ -140,7 +120,7 @@ func (o *WriteOut) failIO(err error) *tt.Fail {
 // accepted before going on to the next, so Committed equals what the
 // writer holds whichever write failed. A write that takes nothing without
 // an error is errWriteZero rather than a spin.
-func (o *WriteOut) send(b []byte) *tt.Fail {
+func (o *WriteOut) send(b []byte) *shared.Fail {
 	for len(b) > 0 {
 		n, err := o.writer.Write(b)
 		if n < 0 {
@@ -169,7 +149,7 @@ func (o *WriteOut) send(b []byte) *tt.Fail {
 	return nil
 }
 
-func (o *WriteOut) drain() *tt.Fail {
+func (o *WriteOut) drain() *shared.Fail {
 	if len(o.buf) == 0 {
 		return nil
 	}
@@ -182,12 +162,12 @@ func (o *WriteOut) drain() *tt.Fail {
 }
 
 // WriteStr takes one fragment.
-func (o *WriteOut) WriteStr(s string) *tt.Fail {
+func (o *WriteOut) WriteStr(s string) *shared.Fail {
 	n := uint64(len(s))
 	if o.maxOutputBytes != nil {
 		max := *o.maxOutputBytes
 		if o.accepted+n > max || o.accepted+n < o.accepted {
-			f := tt.LimitFail("max_output_bytes", max, fmt.Sprintf(
+			f := shared.LimitFail("max_output_bytes", max, fmt.Sprintf(
 				"the output would exceed %d bytes: %d written, %d more", max, o.accepted, n))
 			if o.committed > 0 {
 				f.Committed()
@@ -215,7 +195,7 @@ func (o *WriteOut) WriteStr(s string) *tt.Fail {
 
 // Flush drains the buffer to the writer, then flushes the writer when it
 // can be flushed.
-func (o *WriteOut) Flush() *tt.Fail {
+func (o *WriteOut) Flush() *shared.Fail {
 	if f := o.drain(); f != nil {
 		return f
 	}
@@ -241,13 +221,13 @@ type StringOut struct {
 func NewStringOut() *StringOut { return &StringOut{} }
 
 // WriteStr appends s.
-func (s *StringOut) WriteStr(t string) *tt.Fail {
+func (s *StringOut) WriteStr(t string) *shared.Fail {
 	s.text.WriteString(t)
 	return nil
 }
 
 // Flush does nothing: the string is the destination.
-func (s *StringOut) Flush() *tt.Fail { return nil }
+func (s *StringOut) Flush() *shared.Fail { return nil }
 
 // HasCommitted reports whether the string holds any text: it is the
 // destination, so its text is committed as soon as it is there.
@@ -280,9 +260,9 @@ func NewJoin[O TextOut](out O, separator string) *Join[O] {
 
 // ItemStart begins an item: the separator is written now if an item came
 // before. Starting an item inside an item is PROTOCOL_ORDER_ERROR.
-func (j *Join[O]) ItemStart() *tt.Fail {
+func (j *Join[O]) ItemStart() *shared.Fail {
 	if j.inItem {
-		return tt.ProtocolFail("join: an item started inside an item that has not ended")
+		return shared.ProtocolFail("join: an item started inside an item that has not ended")
 	}
 	if j.items > 0 && j.separator != "" {
 		if f := j.out.WriteStr(j.separator); f != nil {
@@ -296,9 +276,9 @@ func (j *Join[O]) ItemStart() *tt.Fail {
 
 // ItemEnd ends the current item. Ending when no item is open is
 // PROTOCOL_ORDER_ERROR.
-func (j *Join[O]) ItemEnd() *tt.Fail {
+func (j *Join[O]) ItemEnd() *shared.Fail {
 	if !j.inItem {
-		return tt.ProtocolFail("join: an item ended when none was open")
+		return shared.ProtocolFail("join: an item ended when none was open")
 	}
 	j.inItem = false
 	return nil
@@ -311,7 +291,7 @@ func (j *Join[O]) Items() uint64 { return j.items }
 func (j *Join[O]) Inner() O { return j.out }
 
 // WriteStr writes s inside the open item, or as an item of its own.
-func (j *Join[O]) WriteStr(s string) *tt.Fail {
+func (j *Join[O]) WriteStr(s string) *shared.Fail {
 	if j.inItem {
 		return j.out.WriteStr(s)
 	}
@@ -326,7 +306,7 @@ func (j *Join[O]) WriteStr(s string) *tt.Fail {
 
 // Flush flushes the output beneath; an open item stays open, since a
 // flush is about transport and an item is about meaning.
-func (j *Join[O]) Flush() *tt.Fail { return j.out.Flush() }
+func (j *Join[O]) Flush() *shared.Fail { return j.out.Flush() }
 
 // HasCommitted asks the output beneath.
 func (j *Join[O]) HasCommitted() bool { return j.out.HasCommitted() }
@@ -345,10 +325,10 @@ func NewConcat[O TextOut](out O) *Concat[O] {
 }
 
 // ItemStart begins an item; see Join.ItemStart.
-func (c *Concat[O]) ItemStart() *tt.Fail { return c.join.ItemStart() }
+func (c *Concat[O]) ItemStart() *shared.Fail { return c.join.ItemStart() }
 
 // ItemEnd ends the current item; see Join.ItemEnd.
-func (c *Concat[O]) ItemEnd() *tt.Fail { return c.join.ItemEnd() }
+func (c *Concat[O]) ItemEnd() *shared.Fail { return c.join.ItemEnd() }
 
 // Items is the items begun so far.
 func (c *Concat[O]) Items() uint64 { return c.join.Items() }
@@ -357,10 +337,10 @@ func (c *Concat[O]) Items() uint64 { return c.join.Items() }
 func (c *Concat[O]) Inner() O { return c.join.out }
 
 // WriteStr appends s.
-func (c *Concat[O]) WriteStr(s string) *tt.Fail { return c.join.WriteStr(s) }
+func (c *Concat[O]) WriteStr(s string) *shared.Fail { return c.join.WriteStr(s) }
 
 // Flush flushes the output beneath.
-func (c *Concat[O]) Flush() *tt.Fail { return c.join.Flush() }
+func (c *Concat[O]) Flush() *shared.Fail { return c.join.Flush() }
 
 // HasCommitted asks the output beneath.
 func (c *Concat[O]) HasCommitted() bool { return c.join.HasCommitted() }
@@ -408,7 +388,7 @@ func (r *ReplaceText[O]) pendingLen(rest string) int {
 	return 0
 }
 
-func (r *ReplaceText[O]) scan(text string) *tt.Fail {
+func (r *ReplaceText[O]) scan(text string) *shared.Fail {
 	rest := text
 	for {
 		i := strings.Index(rest, r.from)
@@ -440,7 +420,7 @@ func (r *ReplaceText[O]) scan(text string) *tt.Fail {
 }
 
 // WriteStr takes one fragment.
-func (r *ReplaceText[O]) WriteStr(s string) *tt.Fail {
+func (r *ReplaceText[O]) WriteStr(s string) *shared.Fail {
 	if r.from == "" {
 		return r.out.WriteStr(s)
 	}
@@ -453,7 +433,7 @@ func (r *ReplaceText[O]) WriteStr(s string) *tt.Fail {
 }
 
 // Flush writes the carry out, then flushes the output beneath.
-func (r *ReplaceText[O]) Flush() *tt.Fail {
+func (r *ReplaceText[O]) Flush() *shared.Fail {
 	if r.carry != "" {
 		pending := r.carry
 		r.carry = ""

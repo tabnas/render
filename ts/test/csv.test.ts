@@ -8,7 +8,7 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert'
 
-import { Cell, Fail, PublicColumn, TableEvent } from '@tabnas/transduce'
+import { Cell, Fail, PublicColumn, TableEvent } from '@tabnas/alchemy/shared'
 
 import { BytesWriter, CsvOptions, CsvRenderer, MissingText, StringOut, WriteOut } from '../dist/render'
 

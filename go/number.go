@@ -24,7 +24,7 @@ import (
 	"math"
 	"strconv"
 
-	tt "github.com/tabnas/transduce/go"
+	"github.com/tabnas/alchemy/go/shared"
 )
 
 // IsJSONNumber reports whether text is a number by RFC 8259's grammar:
@@ -76,9 +76,9 @@ func IsJSONNumber(text string) bool {
 // included. A value that is not finite is TARGET_VALUE_UNREPRESENTABLE,
 // with or without a lexeme. Nothing is formatted here, so a renderer can
 // run this over a whole row before writing a byte of it.
-func checkNumber(value float64, lexeme string, hasLexeme bool) *tt.Fail {
+func checkNumber(value float64, lexeme string, hasLexeme bool) *shared.Fail {
 	if hasLexeme && !IsJSONNumber(lexeme) {
-		return tt.NewFail(tt.CodeInvalidNumber, fmt.Sprintf("%s is not a JSON number", strconv.Quote(lexeme)))
+		return shared.NewFail(shared.CodeInvalidNumber, fmt.Sprintf("%s is not a JSON number", strconv.Quote(lexeme)))
 	}
 	if math.IsNaN(value) || math.IsInf(value, 0) {
 		var message string
@@ -87,7 +87,7 @@ func checkNumber(value float64, lexeme string, hasLexeme bool) *tt.Fail {
 		} else {
 			message = fmt.Sprintf("%s has no representation as a number", nonFinite(value))
 		}
-		return tt.NewFail(tt.CodeTargetValueUnrepresentable, message)
+		return shared.NewFail(shared.CodeTargetValueUnrepresentable, message)
 	}
 	return nil
 }

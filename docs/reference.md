@@ -4,7 +4,7 @@ The types are documented in the crate (`cargo doc --open` from `rs/`);
 this page lists the surface, the contract each piece keeps, and the
 decisions taken where transduce's `docs/architecture.md` (section 3, the
 design this crate implements) was silent. Every failure code named here is
-a `tabnas_transduce::Code`, written as the code is (`PROTOCOL_ORDER_ERROR`).
+a `tabnas_alchemy::shared::Code`, written as the code is (`PROTOCOL_ORDER_ERROR`).
 
 ## Text outputs (`rs/src/text.rs`)
 
@@ -228,7 +228,7 @@ is the exact output text through the support escape codec: `\r`, `\n`,
 `\t` and `\\` decode, every other backslash sequence stands, so a JSON
 escape in the output is written with its backslash doubled (`\\n`). The
 `expected` cell of `text.tsv` is a JSON array of strings. In every file
-`ERROR:<CODE>` is a failure with that `tabnas_transduce::Code`, the
+`ERROR:<CODE>` is a failure with that `tabnas_alchemy::shared::Code`, the
 first one the run meets: events are fed in order and the run stops at
 the first failure. A fixture cell that does not follow these encodings
 is a defect in the fixture and fails the suite loudly; it never becomes

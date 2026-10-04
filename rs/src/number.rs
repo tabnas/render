@@ -18,7 +18,7 @@
 
 use std::fmt::Write as _;
 
-use tabnas_transduce::{Code, Fail};
+use tabnas_alchemy::shared::{Code, Fail};
 
 /// Whether `text` is a number by RFC 8259's grammar:
 /// `-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?`, nothing else and

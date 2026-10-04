@@ -22,20 +22,30 @@
 // - number: the JSON number grammar both renderers hold lexemes to.
 //
 // Every renderer validates its protocol as it goes and reports the stable
-// codes of `@tabnas/transduce`'s `Code`; the output is flushed once, at
-// the protocol's end, and a failure found after text was written says so
-// with `committedOutput`. Everything is synchronous: a renderer is a sink
-// the transducer calls, and a slow writer slows the parse.
+// codes of the shared `Code`; the output is flushed once, at the
+// protocol's end, and a failure found after text was written says so with
+// `committedOutput`. Everything is synchronous: a renderer is a sink the
+// transducer calls, and a slow writer slows the parse.
+//
+// The protocols this package renders, `Fail` and its codes, the text
+// boundary (`TextOut`, `Writer`) and the renderers' options (`CsvOptions`,
+// `MissingText`, `Newline`, `Quoting`, `JsonOptions`, `MissingRecord`) are
+// alchemy's shared types (`@tabnas/alchemy/shared`), which this package
+// imports, and re-exports where it always exported them. `renderers` is
+// this package's renderers and text stages as alchemy's `Renderers`, for a
+// host to pass to alchemy's `compile`.
 
 // This package's version, as package.json declares it.
 export const VERSION = '0.1.2'
 
-export { CsvOptions, CsvRenderer, MissingText, Newline } from './csv'
-export type { Quoting } from './csv'
-export { JsonOptions, JsonRenderer } from './json'
+export { CsvRenderer } from './csv'
+export { CsvOptions, MissingText, Newline } from '@tabnas/alchemy/shared'
+export type { Quoting } from '@tabnas/alchemy/shared'
+export { JsonRenderer } from './json'
+export { JsonOptions } from '@tabnas/alchemy/shared'
 export { checkNumber, isJsonNumber, writeValue } from './number'
 export { RecordsToJson } from './records'
-export type { MissingRecord } from './records'
+export type { MissingRecord } from '@tabnas/alchemy/shared'
 export {
   BytesWriter,
   Concat,
@@ -47,4 +57,5 @@ export {
   WriteOut,
   hasCommitted,
 } from './text'
-export type { TextOut, Writer } from './text'
+export type { TextOut, Writer } from '@tabnas/alchemy/shared'
+export { renderers } from './renderers'

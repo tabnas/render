@@ -16,7 +16,16 @@ import { describe, it } from 'node:test'
 import assert from 'node:assert'
 
 import { findSpecDir, loadSpec, makeRunner, unescape } from '@tabnas/support'
-import { Cell, Ev, Fail, JsonEvent, PublicColumn, Sink, TableEvent, TableSink } from '@tabnas/transduce'
+import {
+  Cell,
+  Ev,
+  Fail,
+  JsonEvent,
+  PublicColumn,
+  Sink,
+  TableEvent,
+  TableSink,
+} from '@tabnas/alchemy/shared'
 
 import { isJsonNumber } from '../dist/render'
 

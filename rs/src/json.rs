@@ -15,21 +15,13 @@
 //! standard ones are: one root value, keys only where a member begins,
 //! balanced containers, one end.
 
-use tabnas_transduce::{Fail, Flow, JsonEvent, Number, Sink};
+use tabnas_alchemy::shared::{Fail, Flow, JsonEvent, Number, Sink};
 
 use crate::number::{check_number, write_value};
 use crate::text::TextOut;
 
-/// The JSON profile.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct JsonOptions {
-    /// Spaces per nesting level, with a newline before every item and
-    /// every closing bracket of a non-empty container. `None` or `Some(0)`
-    /// is compact: no whitespace at all.
-    pub indent: Option<usize>,
-    /// Write a newline after the root value, at `End`.
-    pub trailing_newline: bool,
-}
+/// The JSON profile, which is one of alchemy's shared types.
+pub use tabnas_alchemy::shared::json::JsonOptions;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Frame {
@@ -382,18 +374,18 @@ impl<O: TextOut> Sink for JsonRenderer<O> {
 mod tests {
     use super::*;
     use crate::text::{StringOut, WriteOut};
-    use tabnas_transduce::Code;
+    use tabnas_alchemy::shared::Code;
     use JsonEvent::*;
 
     fn num(lexeme: &str) -> JsonEvent<'_> {
-        Number(tabnas_transduce::Number::with_lexeme(
+        Number(tabnas_alchemy::shared::Number::with_lexeme(
             lexeme.parse().unwrap_or(0.0),
             lexeme,
         ))
     }
 
     fn value(v: f64) -> JsonEvent<'static> {
-        Number(tabnas_transduce::Number::new(v))
+        Number(tabnas_alchemy::shared::Number::new(v))
     }
 
     fn render(options: JsonOptions, events: &[JsonEvent<'_>]) -> Result<std::string::String, Fail> {
@@ -423,11 +415,11 @@ mod tests {
         ObjectStart,
         Key("a"),
         ArrayStart,
-        Number(tabnas_transduce::Number {
+        Number(tabnas_alchemy::shared::Number {
             value: 1.0,
             lexeme: Some("1"),
         }),
-        Number(tabnas_transduce::Number {
+        Number(tabnas_alchemy::shared::Number {
             value: 2.5,
             lexeme: None,
         }),
@@ -542,7 +534,7 @@ mod tests {
             "\u{1} starts with control",
         ] {
             let mut want = std::string::String::new();
-            tabnas_transduce::write_json_string(text, &mut want);
+            tabnas_alchemy::shared::write_json_string(text, &mut want);
             assert_eq!(compact(&[String(text), End]).unwrap(), want, "{text:?}");
         }
     }
@@ -622,7 +614,7 @@ mod tests {
         // "1e999" is a JSON number by grammar, but the value beside it is
         // infinity and a reader of the text would refuse it; the crate's
         // own oracle (serde_json) does. Nothing is written for it.
-        let overflowed = Number(tabnas_transduce::Number::with_lexeme(
+        let overflowed = Number(tabnas_alchemy::shared::Number::with_lexeme(
             f64::INFINITY,
             "1e999",
         ));

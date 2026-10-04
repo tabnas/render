@@ -17,7 +17,7 @@ ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 # the ones those name in turn (transduce takes parser and json; jsonl takes json;
 # yaml and csv take jsonic). A dependency's dev-dependencies are not built,
 # so transduce's own test grammars are not needed here.
-SIBLINGS="parser json jsonl jsonic yaml csv transduce support"
+SIBLINGS="parser json jsonl jsonic yaml csv transduce support alchemy"
 
 for SIBLING in $SIBLINGS; do
   if [[ ! -f "$ROOT/../$SIBLING/rs/Cargo.toml" ]]; then

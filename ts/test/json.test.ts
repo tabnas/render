@@ -8,7 +8,7 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert'
 
-import { Ev, Fail, JsonEvent, jsonString } from '@tabnas/transduce'
+import { Ev, Fail, JsonEvent, jsonString } from '@tabnas/alchemy/shared'
 
 import { BytesWriter, JsonOptions, JsonRenderer, StringOut, TextOut, WriteOut } from '../dist/render'
 

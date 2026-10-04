@@ -1,7 +1,10 @@
 # Agents Guide — render
 
 This repository is **tabnas-render**: renderers for the protocols
-[tabnas-transduce](https://github.com/tabnas/transduce) produces. A
+alchemy's shared types define ([`tabnas_alchemy::shared`](https://github.com/tabnas/alchemy/blob/main/rs/src/shared),
+the ones [tabnas-transduce](https://github.com/tabnas/transduce)
+produces). render depends on those types, not on transduce, and offers
+its renderers to alchemy's runtime as its `Renderers`. A
 renderer decides how a semantic protocol becomes text; it never
 interprets the source. `TableRows/1` becomes CSV, `JsonEvents/1` becomes
 JSON, incrementally, under backpressure, through a coalescing writer. The
@@ -67,9 +70,10 @@ standard transducer to be the only one.
 
 | Path | What it is |
 |---|---|
-| `rs/src/text.rs` | `TextOut` (with `has_committed`), `WriteOut` (coalescing, the output limit, `output_bytes`), `StringOut`, `Join`, `Concat`, `ReplaceText` |
-| `rs/src/csv.rs` | `CsvOptions`, `CsvRenderer` (a `TableSink`) |
-| `rs/src/json.rs` | `JsonOptions`, `JsonRenderer` (a `Sink`) |
+| `rs/src/text.rs` | `WriteOut` (coalescing, the output limit, `output_bytes`), `StringOut`, `Join`, `Concat`, `ReplaceText`; `TextOut` (with `has_committed`) is alchemy's shared type, re-exported |
+| `rs/src/csv.rs` | `CsvRenderer` (a `TableSink`); `CsvOptions` and its dialect types are alchemy's shared types, re-exported |
+| `rs/src/json.rs` | `JsonRenderer` (a `Sink`); `JsonOptions` is alchemy's shared type, re-exported |
+| `rs/src/renderers.rs` | `RenderRenderers` (`renderers()`): the renderers and text stages as alchemy's `Renderers` |
 | `rs/src/records.rs` | `RecordsToJson` (`TableRows/1` → `JsonEvents/1`), `MissingRecord` |
 | `rs/src/number.rs` | the JSON number grammar both renderers hold lexemes to; the non-finite check; the shortest text of a lexeme-less value |
 | `rs/tests/csv_readback.rs` | rendered CSV read back with the `csv` crate |
@@ -118,8 +122,9 @@ a renderer on its own, and say so in their names and output.
 
 ## Error codes
 
-This crate raises codes from `tabnas_transduce::Code`, which is the one
-shared set; see transduce's AGENTS.md for the table. The ones raised here:
+This crate raises codes from alchemy's shared `Code`
+(`tabnas_alchemy::shared::Code`), which is the one shared set; see
+transduce's AGENTS.md for the table. The ones raised here:
 `PROTOCOL_ORDER_ERROR` (a row before the schema, two schemas, a row of the
 wrong width, a missing or repeated end, JSON events out of sequence),
 `TARGET_VALUE_UNREPRESENTABLE` (a table with no columns for CSV; NaN or

@@ -8,7 +8,7 @@
 // headerless, LF-terminated table, and the two must agree before the row
 // is compared: a number is the one thing the two renderers share.
 
-import { Cell, Ev, Fail } from '@tabnas/transduce'
+import { Cell, Ev, Fail } from '@tabnas/alchemy/shared'
 
 import { CsvRenderer, JsonRenderer, StringOut } from '../dist/render'
 

@@ -19,11 +19,17 @@
 //! - [`records`]: [`RecordsToJson`], `TableRows/1` as `JsonEvents/1`, an
 //!   array of objects keyed by label.
 //! - [`number`]: the JSON number grammar both renderers hold lexemes to.
+//! - [`renderers`](mod@renderers): [`RenderRenderers`], this crate's
+//!   implementation of alchemy's `Renderers`, the interface a compiled
+//!   alchemy program makes its rendering stages through.
 //!
-//! Every renderer validates its protocol as it goes and reports the
-//! stable codes of [`tabnas_transduce::Code`]; the output is flushed once,
-//! at the protocol's end, and a failure found after text was written says
-//! so with `committed_output`.
+//! The protocols, the text boundary [`TextOut`] and the renderers' options
+//! are tabnas-alchemy's shared types (`tabnas_alchemy::shared`),
+//! re-exported here at the paths they have always had. Every renderer
+//! validates its protocol as it goes and reports the stable codes of
+//! [`tabnas_alchemy::shared::Code`]; the output is flushed once, at the
+//! protocol's end, and a failure found after text was written says so with
+//! `committed_output`.
 
 #![forbid(unsafe_code)]
 
@@ -37,12 +43,14 @@ pub mod csv;
 pub mod json;
 pub mod number;
 pub mod records;
+pub mod renderers;
 pub mod text;
 
 pub use csv::{CsvOptions, CsvRenderer, MissingText, Newline, Quoting};
 pub use json::{JsonOptions, JsonRenderer};
 pub use number::is_json_number;
 pub use records::{MissingRecord, RecordsToJson};
+pub use renderers::{renderers, RenderRenderers};
 pub use text::{Concat, Join, ReplaceText, StringOut, TextOut, WriteOut, DEFAULT_BUDGET};
 
 /// This crate's version, as `Cargo.toml` declares it.

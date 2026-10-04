@@ -9,7 +9,7 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert'
 
-import { Fail, Limits, Metrics } from '@tabnas/transduce'
+import { Fail, Limits, Metrics } from '@tabnas/alchemy/shared'
 
 import {
   BytesWriter,

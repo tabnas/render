@@ -7,9 +7,11 @@
 // becomes CSV, JsonEvents/1 becomes JSON, incrementally, through a
 // coalescing writer with a byte budget. Source interpretation never
 // crosses into this package: a renderer sees labels and cells, never
-// paths. It consumes the transduce Go port's types
-// (github.com/tabnas/transduce/go) exactly as the Rust crate consumes
-// tabnas_transduce's.
+// paths. It consumes the protocol types transduce's Go port produces, as
+// the Rust crate consumes tabnas_transduce's; in Go they are declared in
+// alchemy's shared package (github.com/tabnas/alchemy/go/shared), with
+// TextOut and the CSV and JSON options, which this package names again
+// as aliases.
 //
 //   - [TextOut], the fragment boundary every renderer writes to;
 //     [WriteOut], which coalesces fragments to a byte budget, enforces
@@ -24,9 +26,11 @@
 //     keyed by label.
 //   - [IsJSONNumber], the JSON number grammar both renderers hold lexemes
 //     to, and [FormatValue], the text of a number without one.
+//   - [Renderers], all of these as alchemy's shared.Renderers, which a
+//     host hands to alchemy's Compile.
 //
 // Every renderer validates its protocol as it goes and reports the stable
-// codes of transduce's Code; the output is flushed once, at the
+// codes of the shared Code, transduce's; the output is flushed once, at the
 // protocol's end, and a failure found after text was written says so with
 // CommittedOutput.
 //

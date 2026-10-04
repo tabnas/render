@@ -12,7 +12,7 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert'
 
-import { Cell, PublicColumn } from '@tabnas/transduce'
+import { Cell, PublicColumn } from '@tabnas/alchemy/shared'
 
 import { CsvOptions, CsvRenderer, MissingText, StringOut } from '../dist/render'
 
