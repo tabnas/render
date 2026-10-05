@@ -16,71 +16,20 @@
 // transducer or a host adapter is as much a source of `TableRows/1` as the
 // standard table transducer is.
 
-import { Cell, Fail, Flow, PublicColumn, TableEvent, TableSink } from '@tabnas/transduce'
+import {
+  Cell,
+  CsvOptions,
+  Fail,
+  Flow,
+  Newline,
+  PublicColumn,
+  TableEvent,
+  TableSink,
+  TextOut,
+} from '@tabnas/alchemy/shared'
 
 import { checkNumber, writeValue } from './number'
-import { TextOut, hasCommitted } from './text'
-
-// The record terminator: `crlf`, RFC 4180's and the standard profile's, or
-// `lf`.
-export type Newline = 'crlf' | 'lf'
-
-export const Newline = Object.freeze({
-  CRLF: 'crlf' as Newline,
-  LF: 'lf' as Newline,
-  // The terminator's text.
-  text(newline: Newline): string {
-    return 'lf' === newline ? '\n' : '\r\n'
-  },
-})
-
-// When a field is quoted: `always`, the standard profile, or `minimal`,
-// only a field holding the delimiter, `"`, CR or LF. Under `minimal` an
-// empty field is written as nothing, so the empty string and an empty null
-// text read back the same; that is the dialect's trade-off, not a defect.
-export type Quoting = 'always' | 'minimal'
-
-// What a `missing` cell becomes: an `error` (`MISSING_VALUE`: a table that
-// promised a column and did not deliver it is not silently padded), or
-// this `text` instead.
-export type MissingText = { readonly type: 'error' } | { readonly type: 'text'; readonly text: string }
-
-export const MissingText = Object.freeze({
-  error: Object.freeze({ type: 'error' }) as MissingText,
-  text(text: string): MissingText {
-    return Object.freeze({ type: 'text', text })
-  },
-})
-
-// The CSV dialect.
-export type CsvOptions = {
-  // One character, and not `"`, CR, LF or NUL: those would make the output
-  // unreadable by construction, and are refused when the renderer is
-  // built.
-  delimiter: string
-  newline: Newline
-  // Write the labels as the first record.
-  header: boolean
-  // The text of a `null` cell; empty by default.
-  nullText: string
-  missing: MissingText
-  quoting: Quoting
-}
-
-export const CsvOptions = Object.freeze({
-  // The standard profile: `,`, CRLF, a header, `null` as the empty text,
-  // `missing` an error, every field quoted.
-  default(): CsvOptions {
-    return {
-      delimiter: ',',
-      newline: 'crlf',
-      header: true,
-      nullText: '',
-      missing: MissingText.error,
-      quoting: 'always',
-    }
-  },
-})
+import { hasCommitted } from './text'
 
 type Phase = 'before_schema' | 'rows' | 'done'
 

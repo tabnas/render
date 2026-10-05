@@ -15,60 +15,11 @@
 use std::io;
 use std::sync::Arc;
 
-use tabnas_transduce::{Fail, Limits, Metrics};
+use tabnas_alchemy::shared::{Fail, JoinOut, Limits, Metrics};
 
-/// A consumer of text fragments.
-///
-/// Fragments arrive in order and are concatenated; where the boundaries
-/// fall carries no meaning. `flush` pushes everything held so far to the
-/// final destination, and a renderer calls it exactly once, at the end of
-/// the protocol it renders, so that a document that failed half way is not
-/// flushed as if it were whole.
-pub trait TextOut {
-    fn write_str(&mut self, s: &str) -> Result<(), Fail>;
-    fn flush(&mut self) -> Result<(), Fail>;
-
-    /// Whether any text has reached the final destination, so that a
-    /// failure found now leaves partial output behind. A renderer asks this
-    /// when it fails and reports `committed_output` from the answer, which
-    /// is how a host knows to print `output: "partial"` rather than
-    /// `"none"`. The default is the conservative answer for an output that
-    /// cannot tell: whatever the renderer handed over may be out.
-    /// [`WriteOut`] answers exactly, from the bytes its writer received; a
-    /// fragment that is still buffered is not committed, and `into_inner`
-    /// drops it rather than sending it after the fact.
-    fn has_committed(&self) -> bool {
-        true
-    }
-}
-
-impl<O: TextOut + ?Sized> TextOut for &mut O {
-    fn write_str(&mut self, s: &str) -> Result<(), Fail> {
-        (**self).write_str(s)
-    }
-
-    fn flush(&mut self) -> Result<(), Fail> {
-        (**self).flush()
-    }
-
-    fn has_committed(&self) -> bool {
-        (**self).has_committed()
-    }
-}
-
-impl<O: TextOut + ?Sized> TextOut for Box<O> {
-    fn write_str(&mut self, s: &str) -> Result<(), Fail> {
-        (**self).write_str(s)
-    }
-
-    fn flush(&mut self) -> Result<(), Fail> {
-        (**self).flush()
-    }
-
-    fn has_committed(&self) -> bool {
-        (**self).has_committed()
-    }
-}
+/// The fragment boundary every renderer writes to, which is one of
+/// alchemy's shared types.
+pub use tabnas_alchemy::shared::text::TextOut;
 
 /// The default coalescing budget of a [`WriteOut`]: large enough that a
 /// write per budget is negligible next to the parse, small enough to be
@@ -358,6 +309,17 @@ impl<O: TextOut> Join<O> {
     }
 }
 
+/// A join as alchemy's `Renderers::join` answers it.
+impl<O: TextOut> JoinOut for Join<O> {
+    fn item_start(&mut self) -> Result<(), Fail> {
+        Join::item_start(self)
+    }
+
+    fn item_end(&mut self) -> Result<(), Fail> {
+        Join::item_end(self)
+    }
+}
+
 impl<O: TextOut> TextOut for Join<O> {
     fn write_str(&mut self, s: &str) -> Result<(), Fail> {
         if self.in_item {
@@ -537,7 +499,7 @@ impl<O: TextOut> TextOut for ReplaceText<O> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tabnas_transduce::Code;
+    use tabnas_alchemy::shared::Code;
 
     /// A writer that records each `write` as one chunk, so coalescing is
     /// observable, and fails after a set number of bytes when asked. It

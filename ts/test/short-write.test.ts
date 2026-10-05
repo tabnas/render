@@ -18,7 +18,7 @@ const CHILD = `
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
-const { Metrics } = require('@tabnas/transduce')
+const { Metrics } = require('@tabnas/alchemy/shared')
 const { FdWriter, WriteOut } = require(${JSON.stringify(join(__dirname, '..', 'dist', 'render'))})
 console.log('short-write: start')
 const file = path.join(os.tmpdir(), 'tabnas-render-short-write-' + process.pid + '.txt')

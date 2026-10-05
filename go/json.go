@@ -20,18 +20,8 @@ import (
 	"fmt"
 	"strings"
 
-	tt "github.com/tabnas/transduce/go"
+	"github.com/tabnas/alchemy/go/shared"
 )
-
-// JSONOptions is the JSON profile.
-type JSONOptions struct {
-	// Indent is spaces per nesting level, with a newline before every
-	// item and every closing bracket of a non-empty container. Zero (or
-	// less) is compact: no whitespace at all.
-	Indent int
-	// TrailingNewline writes a newline after the root value, at End.
-	TrailingNewline bool
-}
 
 type frame struct {
 	object       bool
@@ -85,18 +75,18 @@ func (r *JSONRenderer[O]) IsDone() bool { return r.ended }
 // Inner is the output.
 func (r *JSONRenderer[O]) Inner() O { return r.out }
 
-func (r *JSONRenderer[O]) fail(f *tt.Fail) *tt.Fail {
+func (r *JSONRenderer[O]) fail(f *shared.Fail) *shared.Fail {
 	if r.emitted && r.out.HasCommitted() {
 		f.Committed()
 	}
 	return f
 }
 
-func (r *JSONRenderer[O]) protocol(message string) *tt.Fail {
-	return r.fail(tt.ProtocolFail(message))
+func (r *JSONRenderer[O]) protocol(message string) *shared.Fail {
+	return r.fail(shared.ProtocolFail(message))
 }
 
-func (r *JSONRenderer[O]) put(s string) *tt.Fail {
+func (r *JSONRenderer[O]) put(s string) *shared.Fail {
 	r.emitted = true
 	return r.out.WriteStr(s)
 }
@@ -106,7 +96,7 @@ func (r *JSONRenderer[O]) put(s string) *tt.Fail {
 // renderer never holds a copy of a scalar. Every byte that needs an
 // escape is ASCII, so the scan is by byte; a multi-byte character is
 // never split.
-func (r *JSONRenderer[O]) putString(s string) *tt.Fail {
+func (r *JSONRenderer[O]) putString(s string) *shared.Fail {
 	if f := r.put(`"`); f != nil {
 		return f
 	}
@@ -136,7 +126,7 @@ func (r *JSONRenderer[O]) putString(s string) *tt.Fail {
 
 // putNumber writes a number checkNumber has passed: the lexeme as it is,
 // or the value formatted once into the reused scratch buffer.
-func (r *JSONRenderer[O]) putNumber(ev tt.Event) *tt.Fail {
+func (r *JSONRenderer[O]) putNumber(ev shared.Event) *shared.Fail {
 	if ev.HasLexeme {
 		return r.put(ev.Lexeme)
 	}
@@ -146,7 +136,7 @@ func (r *JSONRenderer[O]) putNumber(ev tt.Event) *tt.Fail {
 
 // breakLine writes a line break and the indentation of depth levels;
 // nothing when compact.
-func (r *JSONRenderer[O]) breakLine(depth int) *tt.Fail {
+func (r *JSONRenderer[O]) breakLine(depth int) *shared.Fail {
 	if r.indent == 0 {
 		return nil
 	}
@@ -162,7 +152,7 @@ func (r *JSONRenderer[O]) breakLine(depth int) *tt.Fail {
 
 // beginValue writes the separators before a value, after checking that
 // one may begin.
-func (r *JSONRenderer[O]) beginValue() *tt.Fail {
+func (r *JSONRenderer[O]) beginValue() *shared.Fail {
 	if r.ended {
 		return r.protocol("a value after the end")
 	}
@@ -202,7 +192,7 @@ func (r *JSONRenderer[O]) endValue() {
 	}
 }
 
-func (r *JSONRenderer[O]) key(k string) *tt.Fail {
+func (r *JSONRenderer[O]) key(k string) *shared.Fail {
 	if r.ended {
 		return r.protocol("a key after the end")
 	}
@@ -243,7 +233,7 @@ func (r *JSONRenderer[O]) key(k string) *tt.Fail {
 	return nil
 }
 
-func (r *JSONRenderer[O]) start(open string, fr frame) *tt.Fail {
+func (r *JSONRenderer[O]) start(open string, fr frame) *shared.Fail {
 	if f := r.beginValue(); f != nil {
 		return f
 	}
@@ -254,7 +244,7 @@ func (r *JSONRenderer[O]) start(open string, fr frame) *tt.Fail {
 	return nil
 }
 
-func (r *JSONRenderer[O]) closeObject() *tt.Fail {
+func (r *JSONRenderer[O]) closeObject() *shared.Fail {
 	if r.ended {
 		return r.protocol("an object end after the end")
 	}
@@ -282,7 +272,7 @@ func (r *JSONRenderer[O]) closeObject() *tt.Fail {
 	return nil
 }
 
-func (r *JSONRenderer[O]) closeArray() *tt.Fail {
+func (r *JSONRenderer[O]) closeArray() *shared.Fail {
 	if r.ended {
 		return r.protocol("an array end after the end")
 	}
@@ -307,11 +297,11 @@ func (r *JSONRenderer[O]) closeArray() *tt.Fail {
 	return nil
 }
 
-func (r *JSONRenderer[O]) scalar(ev tt.Event) *tt.Fail {
+func (r *JSONRenderer[O]) scalar(ev shared.Event) *shared.Fail {
 	// Before the separator: a number that will be refused must leave
 	// nothing behind, or a caller that carries on after the failure would
 	// find `[1,,2]` in the output.
-	if ev.Kind == tt.Number {
+	if ev.Kind == shared.Number {
 		if f := checkNumber(ev.Value, ev.Lexeme, ev.HasLexeme); f != nil {
 			return r.fail(f)
 		}
@@ -319,19 +309,19 @@ func (r *JSONRenderer[O]) scalar(ev tt.Event) *tt.Fail {
 	if f := r.beginValue(); f != nil {
 		return f
 	}
-	var f *tt.Fail
+	var f *shared.Fail
 	switch ev.Kind {
-	case tt.Null:
+	case shared.Null:
 		f = r.put("null")
-	case tt.Bool:
+	case shared.Bool:
 		if ev.Bool {
 			f = r.put("true")
 		} else {
 			f = r.put("false")
 		}
-	case tt.Number:
+	case shared.Number:
 		f = r.putNumber(ev)
-	case tt.String:
+	case shared.String:
 		f = r.putString(ev.Text)
 	}
 	if f != nil {
@@ -341,7 +331,7 @@ func (r *JSONRenderer[O]) scalar(ev tt.Event) *tt.Fail {
 	return nil
 }
 
-func (r *JSONRenderer[O]) end() *tt.Fail {
+func (r *JSONRenderer[O]) end() *shared.Fail {
 	if r.ended {
 		return r.protocol("a second end")
 	}
@@ -389,25 +379,25 @@ func escape(c byte) string {
 }
 
 // Event renders one JsonEvents/1 event.
-func (r *JSONRenderer[O]) Event(ev tt.Event) (tt.Flow, *tt.Fail) {
-	var f *tt.Fail
+func (r *JSONRenderer[O]) Event(ev shared.Event) (shared.Flow, *shared.Fail) {
+	var f *shared.Fail
 	switch ev.Kind {
-	case tt.ObjectStart:
+	case shared.ObjectStart:
 		f = r.start("{", frame{object: true, first: true, expectingKey: true})
-	case tt.ArrayStart:
+	case shared.ArrayStart:
 		f = r.start("[", frame{first: true})
-	case tt.ObjectEnd:
+	case shared.ObjectEnd:
 		f = r.closeObject()
-	case tt.ArrayEnd:
+	case shared.ArrayEnd:
 		f = r.closeArray()
-	case tt.Key:
+	case shared.Key:
 		f = r.key(ev.Text)
-	case tt.Null, tt.Bool, tt.Number, tt.String:
+	case shared.Null, shared.Bool, shared.Number, shared.String:
 		f = r.scalar(ev)
-	case tt.End:
+	case shared.End:
 		f = r.end()
 	default:
 		f = r.protocol(fmt.Sprintf("an unknown event kind %s", ev.Kind))
 	}
-	return tt.Continue, f
+	return shared.Continue, f
 }

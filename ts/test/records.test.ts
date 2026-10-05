@@ -7,7 +7,16 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert'
 
-import { Cell, Ev, EventRecorder, Fail, FnSink, JsonEvent, PublicColumn, TableEvent } from '@tabnas/transduce'
+import {
+  Cell,
+  Ev,
+  EventRecorder,
+  Fail,
+  FnSink,
+  JsonEvent,
+  PublicColumn,
+  TableEvent,
+} from '@tabnas/alchemy/shared'
 
 import { JsonRenderer, MissingRecord, RecordsToJson, StringOut } from '../dist/render'
 

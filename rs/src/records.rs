@@ -10,7 +10,7 @@
 //! repeated member in the un-deduplicated record, by keeping the last
 //! value that is there, and the output then carries each label once.
 
-use tabnas_transduce::{
+use tabnas_alchemy::shared::{
     Cell, Code, Fail, Flow, JsonEvent, Number, PublicColumn, Sink, TableEvent, TableSink,
 };
 
@@ -251,7 +251,7 @@ mod tests {
     use super::*;
     use crate::json::{JsonOptions, JsonRenderer};
     use crate::text::StringOut;
-    use tabnas_transduce::{FnSink, OwnedJsonEvent};
+    use tabnas_alchemy::shared::{FnSink, OwnedJsonEvent};
     use OwnedJsonEvent::*;
 
     fn cols(labels: &[&str]) -> Vec<PublicColumn> {

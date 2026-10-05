@@ -16,7 +16,7 @@ import (
 	"fmt"
 	"strconv"
 
-	tt "github.com/tabnas/transduce/go"
+	"github.com/tabnas/alchemy/go/shared"
 )
 
 // MissingRecord is what a CellMissing becomes in a record.
@@ -44,7 +44,7 @@ const (
 // a CellMissing contributes none), in that column's position. A failure
 // found after events were forwarded is marked as having committed output,
 // since the stage downstream may have rendered them.
-type RecordsToJSON[S tt.Sink] struct {
+type RecordsToJSON[S shared.Sink] struct {
 	sink    S
 	missing MissingRecord
 	phase   phase
@@ -57,7 +57,7 @@ type RecordsToJSON[S tt.Sink] struct {
 }
 
 // NewRecordsToJSON is the stage in front of sink, skipping Missing cells.
-func NewRecordsToJSON[S tt.Sink](sink S) *RecordsToJSON[S] {
+func NewRecordsToJSON[S shared.Sink](sink S) *RecordsToJSON[S] {
 	return &RecordsToJSON[S]{sink: sink}
 }
 
@@ -76,30 +76,30 @@ func (r *RecordsToJSON[S]) IsDone() bool { return r.phase == done }
 // Inner is the sink.
 func (r *RecordsToJSON[S]) Inner() S { return r.sink }
 
-func (r *RecordsToJSON[S]) fail(f *tt.Fail) *tt.Fail {
+func (r *RecordsToJSON[S]) fail(f *shared.Fail) *shared.Fail {
 	if r.forwarded {
 		f.Committed()
 	}
 	return f
 }
 
-func (r *RecordsToJSON[S]) send(ev tt.Event) (tt.Flow, *tt.Fail) {
+func (r *RecordsToJSON[S]) send(ev shared.Event) (shared.Flow, *shared.Fail) {
 	r.forwarded = true
 	return r.sink.Event(ev)
 }
 
 // contributes reports whether a cell contributes a member to its record
 // under the policy: every cell but a Missing that is skipped.
-func (r *RecordsToJSON[S]) contributes(c *tt.Cell) bool {
+func (r *RecordsToJSON[S]) contributes(c *shared.Cell) bool {
 	return !(c.IsMissing() && r.missing == MissingSkip)
 }
 
-func (r *RecordsToJSON[S]) schema(columns []tt.PublicColumn) (tt.Flow, *tt.Fail) {
+func (r *RecordsToJSON[S]) schema(columns []shared.PublicColumn) (shared.Flow, *shared.Fail) {
 	switch r.phase {
 	case inRows:
-		return tt.Continue, r.fail(tt.ProtocolFail("a second schema"))
+		return shared.Continue, r.fail(shared.ProtocolFail("a second schema"))
 	case done:
-		return tt.Continue, r.fail(tt.ProtocolFail("a schema after the end"))
+		return shared.Continue, r.fail(shared.ProtocolFail("a schema after the end"))
 	}
 	r.labels = make([]string, len(columns))
 	for i, c := range columns {
@@ -116,18 +116,18 @@ func (r *RecordsToJSON[S]) schema(columns []tt.PublicColumn) (tt.Flow, *tt.Fail)
 		}
 	}
 	r.phase = inRows
-	return r.send(tt.EvArrayStart())
+	return r.send(shared.EvArrayStart())
 }
 
-func (r *RecordsToJSON[S]) row(cells []tt.Cell) (tt.Flow, *tt.Fail) {
+func (r *RecordsToJSON[S]) row(cells []shared.Cell) (shared.Flow, *shared.Fail) {
 	switch r.phase {
 	case beforeSchema:
-		return tt.Continue, tt.ProtocolFail("a row before the schema")
+		return shared.Continue, shared.ProtocolFail("a row before the schema")
 	case done:
-		return tt.Continue, r.fail(tt.ProtocolFail("a row after the end"))
+		return shared.Continue, r.fail(shared.ProtocolFail("a row after the end"))
 	}
 	if len(cells) != len(r.labels) {
-		return tt.Continue, r.fail(tt.ProtocolFail(fmt.Sprintf("row %d has %d cells; the schema has %d columns",
+		return shared.Continue, r.fail(shared.ProtocolFail(fmt.Sprintf("row %d has %d cells; the schema has %d columns",
 			r.rows+1, len(cells), len(r.labels))))
 	}
 	if r.missing == MissingError {
@@ -135,12 +135,12 @@ func (r *RecordsToJSON[S]) row(cells []tt.Cell) (tt.Flow, *tt.Fail) {
 		// not at all, as the CSV renderer renders it.
 		for i := range cells {
 			if cells[i].IsMissing() {
-				return tt.Continue, r.fail(tt.NewFail(tt.CodeMissingValue, fmt.Sprintf(
+				return shared.Continue, r.fail(shared.NewFail(shared.CodeMissingValue, fmt.Sprintf(
 					"row %d has no value for column %s", r.rows+1, strconv.Quote(r.labels[i]))))
 			}
 		}
 	}
-	if flow, f := r.send(tt.EvObjectStart()); f != nil || flow == tt.Stop {
+	if flow, f := r.send(shared.EvObjectStart()); f != nil || flow == shared.Stop {
 		return flow, f
 	}
 	for i := range cells {
@@ -158,51 +158,51 @@ func (r *RecordsToJSON[S]) row(cells []tt.Cell) (tt.Flow, *tt.Fail) {
 		if later >= 0 {
 			continue
 		}
-		var value tt.Event
+		var value shared.Event
 		switch cell.Kind {
-		case tt.CellNull:
-			value = tt.EvNull()
-		case tt.CellBool:
-			value = tt.EvBool(cell.Bool)
-		case tt.CellNumber:
-			value = tt.Event{Kind: tt.Number, HasLexeme: cell.HasLexeme, Value: cell.Value, Lexeme: cell.Lexeme}
-		case tt.CellString:
-			value = tt.EvString(cell.Text)
-		case tt.CellMissing:
+		case shared.CellNull:
+			value = shared.EvNull()
+		case shared.CellBool:
+			value = shared.EvBool(cell.Bool)
+		case shared.CellNumber:
+			value = shared.Event{Kind: shared.Number, HasLexeme: cell.HasLexeme, Value: cell.Value, Lexeme: cell.Lexeme}
+		case shared.CellString:
+			value = shared.EvString(cell.Text)
+		case shared.CellMissing:
 			// Skip does not contribute and was passed over above; Error was
 			// rejected before the row began.
 			if r.missing != MissingNull {
 				continue
 			}
-			value = tt.EvNull()
+			value = shared.EvNull()
 		}
-		if flow, f := r.send(tt.EvKey(r.labels[i])); f != nil || flow == tt.Stop {
+		if flow, f := r.send(shared.EvKey(r.labels[i])); f != nil || flow == shared.Stop {
 			return flow, f
 		}
-		if flow, f := r.send(value); f != nil || flow == tt.Stop {
+		if flow, f := r.send(value); f != nil || flow == shared.Stop {
 			return flow, f
 		}
 	}
-	if flow, f := r.send(tt.EvObjectEnd()); f != nil || flow == tt.Stop {
+	if flow, f := r.send(shared.EvObjectEnd()); f != nil || flow == shared.Stop {
 		return flow, f
 	}
 	r.rows++
-	return tt.Continue, nil
+	return shared.Continue, nil
 }
 
-func (r *RecordsToJSON[S]) end() (tt.Flow, *tt.Fail) {
+func (r *RecordsToJSON[S]) end() (shared.Flow, *shared.Fail) {
 	switch r.phase {
 	case beforeSchema:
-		return tt.Continue, tt.ProtocolFail("the end before the schema")
+		return shared.Continue, shared.ProtocolFail("the end before the schema")
 	case done:
-		return tt.Continue, r.fail(tt.ProtocolFail("a second end"))
+		return shared.Continue, r.fail(shared.ProtocolFail("a second end"))
 	}
-	if flow, f := r.send(tt.EvArrayEnd()); f != nil || flow == tt.Stop {
+	if flow, f := r.send(shared.EvArrayEnd()); f != nil || flow == shared.Stop {
 		return flow, f
 	}
 	// Done only once End has been taken downstream: a sink that failed on
 	// it has not seen the document end.
-	flow, f := r.send(tt.EvEnd())
+	flow, f := r.send(shared.EvEnd())
 	if f != nil {
 		return flow, f
 	}
@@ -211,14 +211,14 @@ func (r *RecordsToJSON[S]) end() (tt.Flow, *tt.Fail) {
 }
 
 // TableEvent turns one TableRows/1 event into JsonEvents/1.
-func (r *RecordsToJSON[S]) TableEvent(ev tt.TableEvent) (tt.Flow, *tt.Fail) {
+func (r *RecordsToJSON[S]) TableEvent(ev shared.TableEvent) (shared.Flow, *shared.Fail) {
 	switch ev.Kind {
-	case tt.TableSchema:
+	case shared.TableSchema:
 		return r.schema(ev.Columns)
-	case tt.TableRow:
+	case shared.TableRow:
 		return r.row(ev.Cells)
-	case tt.TableEnd:
+	case shared.TableEnd:
 		return r.end()
 	}
-	return tt.Continue, r.fail(tt.ProtocolFail(fmt.Sprintf("an unknown table event kind %d", ev.Kind)))
+	return shared.Continue, r.fail(shared.ProtocolFail(fmt.Sprintf("an unknown table event kind %d", ev.Kind)))
 }

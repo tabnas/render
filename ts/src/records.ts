@@ -12,13 +12,18 @@
 // repeated member in the un-deduplicated record, by keeping the last value
 // that is there, and the output then carries each label once.
 
-import { Cell, Ev, Fail, Flow, JsonEvent, PublicColumn, Sink, TableEvent, TableSink } from '@tabnas/transduce'
-
-// What a `missing` cell becomes in a record: `skip` leaves the member out
-// (the record says nothing where the source had nothing, which is what an
-// absent path meant), `null` writes the member with a `null` value, and
-// `error` fails the run with `MISSING_VALUE`.
-export type MissingRecord = 'skip' | 'null' | 'error'
+import {
+  Cell,
+  Ev,
+  Fail,
+  Flow,
+  JsonEvent,
+  MissingRecord,
+  PublicColumn,
+  Sink,
+  TableEvent,
+  TableSink,
+} from '@tabnas/alchemy/shared'
 
 type Phase = 'before_schema' | 'rows' | 'done'
 

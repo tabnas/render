@@ -22,68 +22,8 @@ import (
 	"strconv"
 	"strings"
 
-	tt "github.com/tabnas/transduce/go"
+	"github.com/tabnas/alchemy/go/shared"
 )
-
-// Newline is the record terminator.
-type Newline uint8
-
-const (
-	// NewlineCRLF is RFC 4180's terminator, and the standard profile's.
-	NewlineCRLF Newline = iota
-	// NewlineLF is a dialect.
-	NewlineLF
-)
-
-// String is the terminator's text.
-func (n Newline) String() string {
-	if n == NewlineLF {
-		return "\n"
-	}
-	return "\r\n"
-}
-
-// Quoting is when a field is quoted.
-type Quoting uint8
-
-const (
-	// QuotingAlways quotes every field: the standard profile.
-	QuotingAlways Quoting = iota
-	// QuotingMinimal quotes only a field holding the delimiter, `"`, CR
-	// or LF. An empty field is then written as nothing, so the empty
-	// string and an empty null text read back the same; that is the
-	// dialect's trade-off, not a defect.
-	QuotingMinimal
-)
-
-// CSVOptions is the CSV dialect. Start from DefaultCSVOptions: the zero
-// value's delimiter is NUL, which no reader can take and NewCSVRenderer
-// refuses.
-type CSVOptions struct {
-	// Delimiter is one character, and not `"`, CR, LF or NUL: those would
-	// make the output unreadable by construction, and are refused when
-	// the renderer is built.
-	Delimiter rune
-	Newline   Newline
-	// Header writes the labels as the first record.
-	Header bool
-	// NullText is the text of a CellNull; empty by default.
-	NullText string
-	// Missing is what a CellMissing becomes: nil fails the run with
-	// MISSING_VALUE (a table that promised a column and did not deliver
-	// it is not silently padded), else the text it points at.
-	Missing *string
-	Quoting Quoting
-}
-
-// DefaultCSVOptions is the standard profile: `,`, CRLF, a header, an
-// empty null text, Missing an error, every field quoted.
-func DefaultCSVOptions() CSVOptions {
-	return CSVOptions{Delimiter: ',', Newline: NewlineCRLF, Header: true}
-}
-
-// MissingAs is the CSVOptions.Missing that writes text for a CellMissing.
-func MissingAs(text string) *string { return &text }
 
 type phase uint8
 
@@ -115,10 +55,10 @@ type CSVRenderer[O TextOut] struct {
 
 // NewCSVRenderer is a renderer over out, or TARGET_VALUE_UNREPRESENTABLE
 // when the delimiter is one no CSV reader could take.
-func NewCSVRenderer[O TextOut](out O, options CSVOptions) (*CSVRenderer[O], *tt.Fail) {
+func NewCSVRenderer[O TextOut](out O, options CSVOptions) (*CSVRenderer[O], *shared.Fail) {
 	switch options.Delimiter {
 	case '"', '\r', '\n', 0:
-		return nil, tt.NewFail(tt.CodeTargetValueUnrepresentable, fmt.Sprintf(
+		return nil, shared.NewFail(shared.CodeTargetValueUnrepresentable, fmt.Sprintf(
 			"%s cannot be a CSV delimiter: it is the quote, a line break or NUL",
 			strconv.QuoteRune(options.Delimiter)))
 	}
@@ -144,22 +84,22 @@ func (r *CSVRenderer[O]) Inner() O { return r.out }
 // fail marks a failure as leaving partial output when text this renderer
 // wrote has reached the destination; text still buffered in the output
 // has not, and the output knows which.
-func (r *CSVRenderer[O]) fail(f *tt.Fail) *tt.Fail {
+func (r *CSVRenderer[O]) fail(f *shared.Fail) *shared.Fail {
 	if r.emitted && r.out.HasCommitted() {
 		f.Committed()
 	}
 	return f
 }
 
-func (r *CSVRenderer[O]) schema(columns []tt.PublicColumn) *tt.Fail {
+func (r *CSVRenderer[O]) schema(columns []shared.PublicColumn) *shared.Fail {
 	switch r.phase {
 	case inRows:
-		return r.fail(tt.ProtocolFail("a second schema"))
+		return r.fail(shared.ProtocolFail("a second schema"))
 	case done:
-		return r.fail(tt.ProtocolFail("a schema after the end"))
+		return r.fail(shared.ProtocolFail("a schema after the end"))
 	}
 	if len(columns) == 0 {
-		return tt.NewFail(tt.CodeTargetValueUnrepresentable, "a table with no columns has no CSV form")
+		return shared.NewFail(shared.CodeTargetValueUnrepresentable, "a table with no columns has no CSV form")
 	}
 	r.labels = make([]string, len(columns))
 	for i, c := range columns {
@@ -185,15 +125,15 @@ func (r *CSVRenderer[O]) schema(columns []tt.PublicColumn) *tt.Fail {
 	return nil
 }
 
-func (r *CSVRenderer[O]) row(cells []tt.Cell) *tt.Fail {
+func (r *CSVRenderer[O]) row(cells []shared.Cell) *shared.Fail {
 	switch r.phase {
 	case beforeSchema:
-		return tt.ProtocolFail("a row before the schema")
+		return shared.ProtocolFail("a row before the schema")
 	case done:
-		return r.fail(tt.ProtocolFail("a row after the end"))
+		return r.fail(shared.ProtocolFail("a row after the end"))
 	}
 	if len(cells) != len(r.labels) {
-		return r.fail(tt.ProtocolFail(fmt.Sprintf("row %d has %d cells; the schema has %d columns",
+		return r.fail(shared.ProtocolFail(fmt.Sprintf("row %d has %d cells; the schema has %d columns",
 			r.rows+1, len(cells), len(r.labels))))
 	}
 	if f := r.check(cells); f != nil {
@@ -208,15 +148,15 @@ func (r *CSVRenderer[O]) row(cells []tt.Cell) *tt.Fail {
 		}
 		var text string
 		switch cell.Kind {
-		case tt.CellNull:
+		case shared.CellNull:
 			text = r.options.NullText
-		case tt.CellBool:
+		case shared.CellBool:
 			if cell.Bool {
 				text = "true"
 			} else {
 				text = "false"
 			}
-		case tt.CellNumber:
+		case shared.CellNumber:
 			// check passed the row: the lexeme is a JSON number and the
 			// value is finite, so this pass only formats, once.
 			if cell.HasLexeme {
@@ -225,9 +165,9 @@ func (r *CSVRenderer[O]) row(cells []tt.Cell) *tt.Fail {
 				r.scratch = appendValue(r.scratch[:0], cell.Value)
 				text = string(r.scratch)
 			}
-		case tt.CellString:
+		case shared.CellString:
 			text = cell.Text
-		case tt.CellMissing:
+		case shared.CellMissing:
 			if r.options.Missing == nil {
 				// check rejected this row already.
 				continue
@@ -250,17 +190,17 @@ func (r *CSVRenderer[O]) row(cells []tt.Cell) *tt.Fail {
 // check rejects a row before any of it is written, so a row is rendered
 // whole or not at all and the output stays a sequence of complete records
 // whatever the caller does after a failure. Nothing is formatted here.
-func (r *CSVRenderer[O]) check(cells []tt.Cell) *tt.Fail {
+func (r *CSVRenderer[O]) check(cells []shared.Cell) *shared.Fail {
 	for i := range cells {
 		cell := &cells[i]
 		switch cell.Kind {
-		case tt.CellNumber:
+		case shared.CellNumber:
 			if f := checkNumber(cell.Value, cell.Lexeme, cell.HasLexeme); f != nil {
 				return f.AtPath(fmt.Sprintf("column %s, row %d", strconv.Quote(r.labels[i]), r.rows+1))
 			}
-		case tt.CellMissing:
+		case shared.CellMissing:
 			if r.options.Missing == nil {
-				return tt.NewFail(tt.CodeMissingValue, fmt.Sprintf("row %d has no value for column %s",
+				return shared.NewFail(shared.CodeMissingValue, fmt.Sprintf("row %d has no value for column %s",
 					r.rows+1, strconv.Quote(r.labels[i])))
 			}
 		}
@@ -268,12 +208,12 @@ func (r *CSVRenderer[O]) check(cells []tt.Cell) *tt.Fail {
 	return nil
 }
 
-func (r *CSVRenderer[O]) end() *tt.Fail {
+func (r *CSVRenderer[O]) end() *shared.Fail {
 	switch r.phase {
 	case beforeSchema:
-		return tt.ProtocolFail("the end before the schema")
+		return shared.ProtocolFail("the end before the schema")
 	case done:
-		return r.fail(tt.ProtocolFail("a second end"))
+		return r.fail(shared.ProtocolFail("a second end"))
 	}
 	// Done only once the flush has succeeded: a table whose last bytes
 	// never reached the writer is not done, whatever End said.
@@ -285,24 +225,24 @@ func (r *CSVRenderer[O]) end() *tt.Fail {
 }
 
 // TableEvent renders one TableRows/1 event.
-func (r *CSVRenderer[O]) TableEvent(ev tt.TableEvent) (tt.Flow, *tt.Fail) {
-	var f *tt.Fail
+func (r *CSVRenderer[O]) TableEvent(ev shared.TableEvent) (shared.Flow, *shared.Fail) {
+	var f *shared.Fail
 	switch ev.Kind {
-	case tt.TableSchema:
+	case shared.TableSchema:
 		f = r.schema(ev.Columns)
-	case tt.TableRow:
+	case shared.TableRow:
 		f = r.row(ev.Cells)
-	case tt.TableEnd:
+	case shared.TableEnd:
 		f = r.end()
 	default:
-		f = r.fail(tt.ProtocolFail(fmt.Sprintf("an unknown table event kind %d", ev.Kind)))
+		f = r.fail(shared.ProtocolFail(fmt.Sprintf("an unknown table event kind %d", ev.Kind)))
 	}
-	return tt.Continue, f
+	return shared.Continue, f
 }
 
 // writeField writes one field: quoted with `"` doubled, or bare when the
 // dialect allows and the text needs no quoting.
-func writeField(out TextOut, quoting Quoting, delimiter rune, text string) *tt.Fail {
+func writeField(out TextOut, quoting Quoting, delimiter rune, text string) *shared.Fail {
 	quote := quoting == QuotingAlways ||
 		strings.ContainsRune(text, delimiter) || strings.ContainsAny(text, "\"\r\n")
 	if !quote {

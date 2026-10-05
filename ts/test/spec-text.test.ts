@@ -6,7 +6,7 @@
 // writer received, one per `write` call, or the code of the first failing
 // operation. The encodings are docs/reference.md's "Shared fixtures".
 
-import { Limits } from '@tabnas/transduce'
+import { Limits } from '@tabnas/alchemy/shared'
 
 import { Concat, DEFAULT_BUDGET, Join, ReplaceText, TextOut, WriteOut, Writer } from '../dist/render'
 

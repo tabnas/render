@@ -1,7 +1,9 @@
 # tabnas-render
 
-Renderers for the [tabnas-transduce](https://github.com/tabnas/transduce)
-protocols: streamed tables become CSV, streamed events become JSON,
+Renderers for the event and table protocols of alchemy's shared types
+([`tabnas_alchemy::shared`](https://github.com/tabnas/alchemy), the protocols
+[tabnas-transduce](https://github.com/tabnas/transduce) produces): streamed
+tables become CSV, streamed events become JSON,
 incrementally and under backpressure. A renderer decides how a semantic
 protocol becomes text and never interprets the source; that separation is
 the point.
@@ -38,7 +40,7 @@ through the coalescing writer:
 
 ```rust
 use tabnas_render::{CsvOptions, CsvRenderer, WriteOut};
-use tabnas_transduce::{Cell, PublicColumn, TableEvent, TableSink};
+use tabnas_alchemy::shared::{Cell, PublicColumn, TableEvent, TableSink};
 
 let columns = [PublicColumn::new("name"), PublicColumn::new("balance")];
 let mut csv = CsvRenderer::new(WriteOut::new(Vec::new()), CsvOptions::default())?;
@@ -55,12 +57,13 @@ assert_eq!(
     String::from_utf8(bytes).unwrap(),
     "\"name\",\"balance\"\r\n\"Ada, \"\"the\"\" first\",\"50.250\"\r\n\"\",\"false\"\r\n"
 );
-# Ok::<(), tabnas_transduce::Fail>(())
+# Ok::<(), tabnas_alchemy::shared::Fail>(())
 ```
 
-`JsonRenderer` is a `tabnas_transduce::Sink` and takes `JsonEvents/1` the
-same way; `RecordsToJson` sits between a table and a `Sink` to write the
-table as an array of objects.
+`JsonRenderer` is a `tabnas_alchemy::shared::Sink` and takes `JsonEvents/1`
+the same way; `RecordsToJson` sits between a table and a `Sink` to write the
+table as an array of objects. `renderers()` offers all of them to alchemy's
+runtime as its `Renderers`.
 
 ## Layout
 

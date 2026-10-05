@@ -9,7 +9,7 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert'
 
-import { Fail } from '@tabnas/transduce'
+import { Fail } from '@tabnas/alchemy/shared'
 
 import { checkNumber, isJsonNumber, writeValue } from '../dist/render'
 
