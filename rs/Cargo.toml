@@ -18,12 +18,14 @@ path = "src/lib.rs"
 [dependencies]
 # Sibling checkouts, the standard tabnas development model: the protocols
 # this crate renders, which are alchemy's shared types (its `shared` unit
-# alone, without the language: `default-features = false`), and the
-# engine they are built on.
+# alone, without the language: `default-features = false`). The engine is
+# a dev-dependency: only a test reads values with it.
 tabnas-alchemy = { path = "../../alchemy/rs", default-features = false }
-tabnas = { package = "tabnas-parser", path = "../../parser/rs" }
 
 [dev-dependencies]
+# The engine, for tests/json_readback.rs, which reads rendered JSON back with
+# the engine's `Value` (a sibling checkout, like the rest).
+tabnas = { package = "tabnas-parser", path = "../../parser/rs" }
 # The sources and the table transducer the tests and the benches feed the
 # renderers from.
 tabnas-transduce = { path = "../../transduce/rs" }
