@@ -10,7 +10,7 @@ require github.com/tabnas/alchemy/go v0.2.0
 // parse a document into events (transduce builds on alchemy's shared
 // package from v0.2.0).
 require (
-	github.com/tabnas/parser/go v0.12.9
+	github.com/tabnas/parser/go v0.12.10
 	github.com/tabnas/transduce/go v0.2.0
 )
 
