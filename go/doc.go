@@ -42,4 +42,4 @@ package tabnasrender
 
 // VERSION is this module's version. It must equal rs/Cargo.toml's
 // [package] version; version_test.go fails the build when they drift.
-const VERSION = "0.2.2"
+const VERSION = "0.2.3"
