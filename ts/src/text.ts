@@ -99,8 +99,10 @@ function message(err: unknown): string {
 // bytes, so the text a run leaves behind when it fails part way ends with
 // a whole record: a failure drops the buffer, and with it the record that
 // was being written. A record that outgrows the hold (`DEFAULT_HOLD`
-// unless `withHold` says) is written as it comes, and a failure inside it
-// cuts it; retention is then bounded by the budget and the hold together.
+// unless `withHold` says) is written as it comes, the fragment that
+// outgrows it going to the writer directly after the buffer, and a failure
+// inside it cuts it; the buffer never holds more of an open record than the
+// hold, so retention is bounded by the budget and the hold together.
 // The output limit is checked on every fragment BEFORE it is accepted,
 // counting the
 // bytes buffered as well as the bytes written, so a run that would exceed
@@ -261,11 +263,17 @@ export class WriteOut<W extends Writer = Writer> implements TextOut {
     }
     if (0 === len) return
     if (this.records) {
-      // The open record is held until its end; one that outgrows the hold
-      // is written as it comes.
-      this.append(s, len)
+      // The open record is held until its end. One that outgrows the hold
+      // is written as it comes: the buffer goes first, then the fragment
+      // that outgrew it, which the buffer never takes, so the buffer never
+      // grows past the hold.
+      if (this.len - this.mark + len > this.hold) {
+        this.drain()
+        this.send(Buffer.from(s, 'utf8'))
+      } else {
+        this.append(s, len)
+      }
       this.acceptedBytes += len
-      if (this.len - this.mark > this.hold) this.drain()
       return
     }
     if (this.len + len > this.budget) this.drain()
@@ -487,20 +495,22 @@ function isHighSurrogate(c: number): boolean {
 // literal matches nothing and the text passes through unchanged, the one
 // well-defined meaning it can have in a stream.
 //
-// A record end is no boundary for a match, so marks change no text. One
-// that arrives while code units are carried waits with them, and is passed
-// on where it falls once they are written: before a match that begins
-// there, after one that ends there. One that falls inside a match is
-// dropped, the two records it parted ending together at the next mark.
+// A record end is no boundary for a match, so marks change no text. Record
+// ends that arrive while code units are carried wait with them, each at its
+// own offset, and are passed on where they fall once they are written:
+// before a match that begins there, after one that ends there. One that
+// falls inside a match is dropped, the two records it parted ending
+// together at the next mark. At most one waits at each offset of the carry,
+// so they are as bounded as the carry is.
 export class ReplaceText<O extends TextOut = TextOut> implements TextOut {
   private out: O
   private from: string
   private to: string
   // The carried suffix; exposed read-only for tests of the bound.
   private pending = ''
-  // A record end at this offset into the carry, in code units, waiting for
-  // the carried text to be written; -1 for none.
-  private mark = -1
+  // Record ends at these offsets into the carry, in code units, ascending,
+  // waiting for the carried text to be written.
+  private marks: number[] = []
 
   constructor(out: O, from: string, to: string) {
     this.out = out
@@ -530,41 +540,45 @@ export class ReplaceText<O extends TextOut = TextOut> implements TextOut {
   }
 
   // Write `s`, which begins `at` code units into the text being scanned,
-  // with the waiting record end at `mark` where it falls within it, its end
-  // included. Answers the mark still waiting, -1 for none.
-  private emit(s: string, at: number, mark: number): number {
-    if (-1 !== mark && mark >= at && mark <= at + s.length) {
-      const before = s.slice(0, mark - at)
-      const after = s.slice(mark - at)
-      if ('' !== before) this.out.writeStr(before)
+  // with the waiting record ends from `marks[next]` on where they fall
+  // within it, its end included. Answers the index of the first mark still
+  // waiting.
+  private emit(s: string, at: number, marks: number[], next: number): number {
+    let from = 0
+    for (; next < marks.length && marks[next] <= at + s.length; next++) {
+      const cut = Math.max(marks[next] - at, from)
+      const piece = s.slice(from, cut)
+      if ('' !== piece) this.out.writeStr(piece)
       this.out.recordEnd?.()
-      if ('' !== after) this.out.writeStr(after)
-      return -1
+      from = cut
     }
-    if ('' !== s) this.out.writeStr(s)
-    return mark
+    const rest = s.slice(from)
+    if ('' !== rest) this.out.writeStr(rest)
+    return next
   }
 
-  // Replace the matches in `text`, with a record end waiting at `mark`, and
+  // Replace the matches in `text`, with record ends waiting at `marks`, and
   // carry what could still begin one.
-  private scan(text: string, mark: number): void {
+  private scan(text: string, marks: number[]): void {
+    let next = 0
     let rest = text
     let at = 0
     for (let i = rest.indexOf(this.from); -1 !== i; i = rest.indexOf(this.from)) {
-      mark = this.emit(rest.slice(0, i), at, mark)
+      next = this.emit(rest.slice(0, i), at, marks, next)
       const start = at + i
       const end = start + this.from.length
-      if (mark > start && mark < end) mark = -1
+      while (next < marks.length && marks[next] > start && marks[next] < end) next++
       if ('' !== this.to) this.out.writeStr(this.to)
       rest = rest.slice(i + this.from.length)
       at = end
     }
     const keep = this.pendingLen(rest)
     const written = rest.slice(0, rest.length - keep)
-    mark = this.emit(written, at, mark)
+    next = this.emit(written, at, marks, next)
     this.pending = rest.slice(rest.length - keep)
-    // A mark still waiting lies inside the carry, and moves with it.
-    this.mark = -1 === mark ? -1 : mark - (at + written.length)
+    // The marks still waiting lie inside the carry, and move with it.
+    const base = at + written.length
+    this.marks = marks.slice(next).map((m) => m - base)
   }
 
   writeStr(s: string): void {
@@ -572,24 +586,24 @@ export class ReplaceText<O extends TextOut = TextOut> implements TextOut {
       this.out.writeStr(s)
       return
     }
-    const mark = this.mark
-    this.mark = -1
+    const marks = this.marks
+    this.marks = []
     if ('' === this.pending) {
-      this.scan(s, mark)
+      this.scan(s, marks)
     } else {
       const text = this.pending + s
       this.pending = ''
-      this.scan(text, mark)
+      this.scan(text, marks)
     }
   }
 
   flush(): void {
     if ('' !== this.pending) {
       const pending = this.pending
-      const mark = this.mark
+      const marks = this.marks
       this.pending = ''
-      this.mark = -1
-      this.emit(pending, 0, mark)
+      this.marks = []
+      this.emit(pending, 0, marks, 0)
     }
     this.out.flush()
   }
@@ -600,9 +614,14 @@ export class ReplaceText<O extends TextOut = TextOut> implements TextOut {
   }
 
   // Passed on at once when nothing is carried; otherwise it waits at the
-  // carry's end for the carried text to be written.
+  // carry's end, beside any that wait already, for the carried text to be
+  // written.
   recordEnd(): void {
-    if ('' === this.pending) this.out.recordEnd?.()
-    else this.mark = this.pending.length
+    if ('' === this.pending) {
+      this.out.recordEnd?.()
+      return
+    }
+    const at = this.pending.length
+    if (at !== this.marks[this.marks.length - 1]) this.marks.push(at)
   }
 }

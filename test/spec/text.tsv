@@ -37,8 +37,10 @@ pipeline	ops	expected
 # Record ends: from the first {"op":"record"}, the buffer is drained only
 # at a record end, once it holds at least the budget, so what a failure
 # leaves unsent is the open record. A fragment of any size is held with
-# its record; a record that outgrows the hold is written as it comes, with
-# the whole records before it. A flush drains everything.
+# its record, up to the hold; a record that outgrows the hold is written
+# as it comes: the buffer first, the whole records before it included,
+# then the fragment that outgrew it, which the buffer never takes. A
+# flush drains everything.
 {"budget":4}	["ab",{"op":"record"},"cdefg"]	[]
 {"budget":4}	["ab",{"op":"record"},"cd",{"op":"record"},"ef"]	["abcd"]
 {"budget":4}	["ab",{"op":"record"},"cd",{"op":"record"},"ef",{"op":"flush"}]	["abcd","ef"]
@@ -47,7 +49,8 @@ pipeline	ops	expected
 {"budget":0}	["a","b",{"op":"record"},"c"]	["a","b"]
 {"budget":0}	[{"op":"record"},"a","b",{"op":"record"},"c"]	["ab"]
 {"budget":0}	[{"op":"record"},{"op":"record"},"a",{"op":"record"},{"op":"record"}]	["a"]
-{"budget":8,"hold":3}	[{"op":"record"},"ab",{"op":"record"},"cdef","g"]	["abcdef"]
+{"budget":8,"hold":3}	[{"op":"record"},"ab",{"op":"record"},"cdef","g"]	["ab","cdef"]
+{"budget":8,"hold":3}	[{"op":"record"},"ab",{"op":"record"},"cd","ef","g",{"op":"record"},{"op":"flush"}]	["abcd","ef","g"]
 {"budget":0,"hold":0}	[{"op":"record"},"a","b"]	["a","b"]
 # The output limit counts UTF-8 bytes, buffered as well as written, and
 # fails before the fragment that would exceed it.
@@ -96,15 +99,17 @@ pipeline	ops	expected
 {"stages":[{"replace":["",""]}]}	["abc",{"op":"flush"}]	["abc"]
 {"stages":[{"replace":["日本","JP"]}]}	["日","本語",{"op":"flush"}]	["JP語"]
 {"stages":[{"replace":["\r\n","\n"]}]}	["a\r","\nb\r",{"op":"flush"}]	["a\nb\r"]
-# A record end waits in the carry, and is passed on where it falls once
-# the carried bytes are written: before a match that begins there, after
-# one that ends there; one inside a match is dropped. The text is the
-# same as without it.
+# Record ends wait in the carry, each where it fell, and are passed on
+# where they fall once the carried bytes are written: before a match that
+# begins there, after one that ends there; one inside a match is dropped.
+# The text is the same as without them.
 {"stages":[{"replace":["ab","X"]}],"budget":0}	[{"op":"record"},"xa",{"op":"record"},"c"]	["xa"]
 {"stages":[{"replace":["ab","X"]}],"budget":0}	[{"op":"record"},"xa",{"op":"record"},"c",{"op":"flush"}]	["xa","c"]
 {"stages":[{"replace":["ab","X"]}],"budget":0}	[{"op":"record"},"a",{"op":"record"},"ab",{"op":"flush"}]	["a","X"]
 {"stages":[{"replace":["ab","X"]}],"budget":0}	[{"op":"record"},"xa",{"op":"record"},"b",{"op":"flush"}]	["xX"]
 {"stages":[{"replace":["abc","-"]}],"budget":0}	[{"op":"record"},"ab",{"op":"record"},"x",{"op":"flush"}]	["ab","x"]
+{"stages":[{"replace":["abc","-"]}],"budget":0}	[{"op":"record"},"a",{"op":"record"},"b",{"op":"record"},"x",{"op":"flush"}]	["a","b","x"]
+{"stages":[{"replace":["abc","-"]}],"budget":0}	[{"op":"record"},"a",{"op":"record"},"b",{"op":"record"},"c",{"op":"record"},{"op":"flush"}]	["-"]
 {"stages":[{"replace":["ab","X"]}],"budget":0}	[{"op":"record"},"ab",{"op":"record"},"c",{"op":"flush"}]	["X","c"]
 {"stages":[{"replace":["ab","X"]}],"budget":0}	[{"op":"record"},"a",{"op":"record"},{"op":"flush"}]	["a"]
 # Stacks: stages compose, outermost first; the limit sees the bytes that reach the writer.

@@ -43,7 +43,9 @@ pub const DEFAULT_HOLD: usize = 16 * 1024 * 1024;
 /// part way ends with a whole record: a failure drops the buffer, and with
 /// it the record that was being written. A record that outgrows the hold
 /// ([`DEFAULT_HOLD`] unless [`with_hold`](Self::with_hold) says) is
-/// written as it comes, and a failure inside it cuts it; retention is then
+/// written as it comes, the fragment that outgrows it going to the writer
+/// directly after the buffer, and a failure inside it cuts it; the buffer
+/// never holds more of an open record than the hold, so retention is
 /// bounded by the budget and the hold together. The output limit is
 /// checked on every fragment BEFORE it is accepted, counting the bytes
 /// buffered as well as the bytes written, so a run that would exceed
@@ -227,13 +229,17 @@ impl<W: io::Write> TextOut for WriteOut<W> {
             }
         }
         if self.records {
-            // The open record is held until its end; one that outgrows the
-            // hold is written as it comes.
-            self.buf.extend_from_slice(s.as_bytes());
-            self.accepted += len;
-            if self.buf.len() - self.mark > self.hold {
+            // The open record is held until its end. One that outgrows the
+            // hold is written as it comes: the buffer goes first, then the
+            // fragment that outgrew it, which the buffer never takes, so the
+            // buffer never grows past the hold.
+            if self.buf.len() - self.mark + s.len() > self.hold {
                 self.drain()?;
+                self.send(s.as_bytes())?;
+            } else {
+                self.buf.extend_from_slice(s.as_bytes());
             }
+            self.accepted += len;
             return Ok(());
         }
         if self.buf.len() + s.len() > self.budget {
@@ -472,19 +478,21 @@ impl<O: TextOut> TextOut for Concat<O> {
 /// makes that safe. An empty literal matches nothing and the text passes
 /// through unchanged, the one well-defined meaning it can have in a stream.
 ///
-/// A record end is no boundary for a match, so marks change no text. One
-/// that arrives while bytes are carried waits with them, and is passed on
-/// where it falls once they are written: before a match that begins
-/// there, after one that ends there. One that falls inside a match is
-/// dropped, the two records it parted ending together at the next mark.
+/// A record end is no boundary for a match, so marks change no text.
+/// Record ends that arrive while bytes are carried wait with them, each
+/// at its own offset, and are passed on where they fall once the bytes are
+/// written: before a match that begins there, after one that ends there.
+/// One that falls inside a match is dropped, the two records it parted
+/// ending together at the next mark. At most one waits at each offset of
+/// the carry, so they are as bounded as the carry is.
 pub struct ReplaceText<O: TextOut> {
     out: O,
     from: Box<str>,
     to: Box<str>,
     carry: String,
-    /// A record end at this offset into the carry, waiting for the carried
-    /// bytes to be written.
-    mark: Option<usize>,
+    /// Record ends at these offsets into the carry, ascending, waiting for
+    /// the carried bytes to be written.
+    marks: Vec<usize>,
 }
 
 impl<O: TextOut> ReplaceText<O> {
@@ -494,7 +502,7 @@ impl<O: TextOut> ReplaceText<O> {
             from: from.into(),
             to: to.into(),
             carry: String::new(),
-            mark: None,
+            marks: Vec::new(),
         }
     }
 
@@ -515,44 +523,45 @@ impl<O: TextOut> ReplaceText<O> {
     }
 
     /// Write `s`, which begins `at` bytes into the text being scanned,
-    /// with the waiting record end where it falls within it, its end
-    /// included.
-    fn emit(&mut self, s: &str, at: usize, mark: &mut Option<usize>) -> Result<(), Fail> {
-        if let Some(m) = *mark {
-            if m >= at && m <= at + s.len() {
-                *mark = None;
-                // The mark was set at a fragment's end and `at` is a match's
-                // end or the text's start, so the split is on a char
-                // boundary; the checked form keeps the guarantee without a
-                // panic path.
-                let (before, after) = s.split_at_checked(m - at).unwrap_or((s, ""));
-                if !before.is_empty() {
-                    self.out.write_str(before)?;
-                }
-                self.out.record_end()?;
-                if !after.is_empty() {
-                    self.out.write_str(after)?;
-                }
-                return Ok(());
+    /// with the waiting record ends from `marks[*next]` on where they fall
+    /// within it, its end included; `next` moves past the ones passed on.
+    fn emit(&mut self, s: &str, at: usize, marks: &[usize], next: &mut usize) -> Result<(), Fail> {
+        let mut from = 0;
+        while let Some(&m) = marks.get(*next) {
+            if m > at + s.len() {
+                break;
             }
+            *next += 1;
+            // Each mark was set at a fragment's end and `at` is a match's end
+            // or the text's start, so the cut is on a char boundary; the
+            // checked form keeps the guarantee without a panic path.
+            let cut = m.saturating_sub(at).max(from);
+            let piece = s.get(from..cut).unwrap_or("");
+            if !piece.is_empty() {
+                self.out.write_str(piece)?;
+            }
+            self.out.record_end()?;
+            from = cut;
         }
-        if !s.is_empty() {
-            self.out.write_str(s)?;
+        let rest = s.get(from..).unwrap_or("");
+        if !rest.is_empty() {
+            self.out.write_str(rest)?;
         }
         Ok(())
     }
 
-    /// Replace the matches in `text`, with a record end waiting at `mark`,
+    /// Replace the matches in `text`, with record ends waiting at `marks`,
     /// and carry what could still begin one.
-    fn scan(&mut self, text: &str, mut mark: Option<usize>) -> Result<(), Fail> {
+    fn scan(&mut self, text: &str, mut marks: Vec<usize>) -> Result<(), Fail> {
+        let mut next = 0;
         let mut rest = text;
         let mut at = 0;
         while let Some(i) = rest.find(&*self.from) {
-            self.emit(&rest[..i], at, &mut mark)?;
+            self.emit(&rest[..i], at, &marks, &mut next)?;
             let start = at + i;
             let end = start + self.from.len();
-            if mark.is_some_and(|m| m > start && m < end) {
-                mark = None;
+            while marks.get(next).is_some_and(|&m| m > start && m < end) {
+                next += 1;
             }
             if !self.to.is_empty() {
                 self.out.write_str(&self.to)?;
@@ -568,12 +577,16 @@ impl<O: TextOut> ReplaceText<O> {
         let (written, pending) = rest
             .split_at_checked(rest.len() - keep)
             .unwrap_or((rest, ""));
-        self.emit(written, at, &mut mark)?;
+        self.emit(written, at, &marks, &mut next)?;
         let at = at + written.len();
         self.carry.clear();
         self.carry.push_str(pending);
-        // A mark still waiting lies inside the carry, and moves with it.
-        self.mark = mark.map(|m| m - at);
+        // The marks still waiting lie inside the carry, and move with it.
+        marks.drain(..next);
+        for m in &mut marks {
+            *m = m.saturating_sub(at);
+        }
+        self.marks = marks;
         Ok(())
     }
 }
@@ -583,21 +596,21 @@ impl<O: TextOut> TextOut for ReplaceText<O> {
         if self.from.is_empty() {
             return self.out.write_str(s);
         }
-        let mark = self.mark.take();
+        let marks = std::mem::take(&mut self.marks);
         if self.carry.is_empty() {
-            self.scan(s, mark)
+            self.scan(s, marks)
         } else {
             let mut text = std::mem::take(&mut self.carry);
             text.push_str(s);
-            self.scan(&text, mark)
+            self.scan(&text, marks)
         }
     }
 
     fn flush(&mut self) -> Result<(), Fail> {
         if !self.carry.is_empty() {
             let pending = std::mem::take(&mut self.carry);
-            let mut mark = self.mark.take();
-            self.emit(&pending, 0, &mut mark)?;
+            let marks = std::mem::take(&mut self.marks);
+            self.emit(&pending, 0, &marks, &mut 0)?;
         }
         self.out.flush()
     }
@@ -608,12 +621,16 @@ impl<O: TextOut> TextOut for ReplaceText<O> {
     }
 
     /// Passed on at once when nothing is carried; otherwise it waits at
-    /// the carry's end for the carried bytes to be written.
+    /// the carry's end, beside any that wait already, for the carried
+    /// bytes to be written.
     fn record_end(&mut self) -> Result<(), Fail> {
         if self.carry.is_empty() {
             self.out.record_end()
         } else {
-            self.mark = Some(self.carry.len());
+            let at = self.carry.len();
+            if self.marks.last() != Some(&at) {
+                self.marks.push(at);
+            }
             Ok(())
         }
     }

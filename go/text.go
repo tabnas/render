@@ -49,8 +49,10 @@ var errWriteZero = errors.New("failed to write whole buffer")
 // bytes, so the text a run leaves behind when it fails part way ends with
 // a whole record: a failure drops the buffer, and with it the record that
 // was being written. A record that outgrows the hold (DefaultHold unless
-// WithHold says) is written as it comes, and a failure inside it cuts it;
-// retention is then bounded by the budget and the hold together. A
+// WithHold says) is written as it comes, the fragment that outgrows it
+// going to the writer directly after the buffer, and a failure inside it
+// cuts it; the buffer never holds more of an open record than the hold, so
+// retention is bounded by the budget and the hold together. A
 // zero-length fragment is never a write. The output limit is checked on
 // every fragment BEFORE it is accepted, counting the bytes buffered as
 // well as the bytes written (UTF-8 bytes, as Go strings are), so a run
@@ -211,13 +213,23 @@ func (o *WriteOut) WriteStr(s string) *shared.Fail {
 		}
 	}
 	if o.records {
-		// The open record is held until its end; one that outgrows the
-		// hold is written as it comes.
-		o.buf = append(o.buf, s...)
-		o.accepted += n
-		if len(o.buf)-o.mark > o.hold {
-			return o.drain()
+		// The open record is held until its end. One that outgrows the
+		// hold is written as it comes: the buffer goes first, then the
+		// fragment that outgrew it, which the buffer never takes, so the
+		// buffer never grows past the hold.
+		if len(o.buf)-o.mark+len(s) > o.hold {
+			if f := o.drain(); f != nil {
+				return f
+			}
+			if len(s) > 0 {
+				if f := o.send([]byte(s)); f != nil {
+					return f
+				}
+			}
+		} else {
+			o.buf = append(o.buf, s...)
 		}
+		o.accepted += n
 		return nil
 	}
 	if len(o.buf)+len(s) > o.budget {
@@ -422,24 +434,26 @@ func (c *Concat[O]) RecordEnd() *shared.Fail { return c.join.RecordEnd() }
 // boundary. An empty literal matches nothing and the text passes through
 // unchanged.
 //
-// A record end is no boundary for a match, so marks change no text. One
-// that arrives while bytes are carried waits with them, and is passed on
-// where it falls once they are written: before a match that begins there,
-// after one that ends there. One that falls inside a match is dropped,
-// the two records it parted ending together at the next mark.
+// A record end is no boundary for a match, so marks change no text.
+// Record ends that arrive while bytes are carried wait with them, each at
+// its own offset, and are passed on where they fall once the bytes are
+// written: before a match that begins there, after one that ends there.
+// One that falls inside a match is dropped, the two records it parted
+// ending together at the next mark. At most one waits at each offset of
+// the carry, so they are as bounded as the carry is.
 type ReplaceText[O TextOut] struct {
 	out   O
 	from  string
 	to    string
 	carry string
-	// mark is a record end at this offset into the carry, waiting for the
-	// carried bytes to be written; -1 for none.
-	mark int
+	// marks are record ends at these offsets into the carry, ascending,
+	// waiting for the carried bytes to be written.
+	marks []int
 }
 
 // NewReplaceText is a ReplaceText over out.
 func NewReplaceText[O TextOut](out O, from, to string) *ReplaceText[O] {
-	return &ReplaceText[O]{out: out, from: from, to: to, mark: -1}
+	return &ReplaceText[O]{out: out, from: from, to: to}
 }
 
 // Inner is the output beneath.
@@ -463,37 +477,37 @@ func (r *ReplaceText[O]) pendingLen(rest string) int {
 }
 
 // emit writes s, which begins at bytes into the text being scanned, with
-// the waiting record end at mark where it falls within it, its end
-// included. It answers the mark still waiting, -1 for none.
-func (r *ReplaceText[O]) emit(s string, at, mark int) (int, *shared.Fail) {
-	if mark >= 0 && mark >= at && mark <= at+len(s) {
-		before, after := s[:mark-at], s[mark-at:]
-		if before != "" {
-			if f := r.out.WriteStr(before); f != nil {
-				return -1, f
+// the waiting record ends from marks[next] on where they fall within it,
+// its end included. It answers the index of the first mark still waiting.
+func (r *ReplaceText[O]) emit(s string, at int, marks []int, next int) (int, *shared.Fail) {
+	from := 0
+	for ; next < len(marks) && marks[next] <= at+len(s); next++ {
+		cut := marks[next] - at
+		if cut < from {
+			cut = from
+		}
+		if piece := s[from:cut]; piece != "" {
+			if f := r.out.WriteStr(piece); f != nil {
+				return next, f
 			}
 		}
 		if f := shared.RecordEnd(r.out); f != nil {
-			return -1, f
+			return next, f
 		}
-		if after != "" {
-			if f := r.out.WriteStr(after); f != nil {
-				return -1, f
-			}
-		}
-		return -1, nil
+		from = cut
 	}
-	if s != "" {
-		if f := r.out.WriteStr(s); f != nil {
-			return mark, f
+	if rest := s[from:]; rest != "" {
+		if f := r.out.WriteStr(rest); f != nil {
+			return next, f
 		}
 	}
-	return mark, nil
+	return next, nil
 }
 
-// scan replaces the matches in text, with a record end waiting at mark,
+// scan replaces the matches in text, with record ends waiting at marks,
 // and carries what could still begin one.
-func (r *ReplaceText[O]) scan(text string, mark int) *shared.Fail {
+func (r *ReplaceText[O]) scan(text string, marks []int) *shared.Fail {
+	next := 0
 	rest := text
 	at := 0
 	var f *shared.Fail
@@ -502,13 +516,13 @@ func (r *ReplaceText[O]) scan(text string, mark int) *shared.Fail {
 		if i < 0 {
 			break
 		}
-		if mark, f = r.emit(rest[:i], at, mark); f != nil {
+		if next, f = r.emit(rest[:i], at, marks, next); f != nil {
 			return f
 		}
 		start := at + i
 		end := start + len(r.from)
-		if mark > start && mark < end {
-			mark = -1
+		for next < len(marks) && marks[next] > start && marks[next] < end {
+			next++
 		}
 		if r.to != "" {
 			if f := r.out.WriteStr(r.to); f != nil {
@@ -520,16 +534,18 @@ func (r *ReplaceText[O]) scan(text string, mark int) *shared.Fail {
 	}
 	keep := r.pendingLen(rest)
 	written := rest[:len(rest)-keep]
-	if mark, f = r.emit(written, at, mark); f != nil {
+	if next, f = r.emit(written, at, marks, next); f != nil {
 		return f
 	}
 	// A copy, so the carry never pins the fragment it was cut from.
 	r.carry = strings.Clone(rest[len(rest)-keep:])
-	// A mark still waiting lies inside the carry, and moves with it.
-	if mark >= 0 {
-		mark -= at + len(written)
+	// The marks still waiting lie inside the carry, and move with it.
+	base := at + len(written)
+	waiting := marks[:0]
+	for _, m := range marks[next:] {
+		waiting = append(waiting, m-base)
 	}
-	r.mark = mark
+	r.marks = waiting
 	return nil
 }
 
@@ -538,22 +554,22 @@ func (r *ReplaceText[O]) WriteStr(s string) *shared.Fail {
 	if r.from == "" {
 		return r.out.WriteStr(s)
 	}
-	mark := r.mark
-	r.mark = -1
+	marks := r.marks
+	r.marks = nil
 	if r.carry == "" {
-		return r.scan(s, mark)
+		return r.scan(s, marks)
 	}
 	text := r.carry + s
 	r.carry = ""
-	return r.scan(text, mark)
+	return r.scan(text, marks)
 }
 
 // Flush writes the carry out, then flushes the output beneath.
 func (r *ReplaceText[O]) Flush() *shared.Fail {
 	if r.carry != "" {
-		pending, mark := r.carry, r.mark
-		r.carry, r.mark = "", -1
-		if _, f := r.emit(pending, 0, mark); f != nil {
+		pending, marks := r.carry, r.marks
+		r.carry, r.marks = "", nil
+		if _, f := r.emit(pending, 0, marks, 0); f != nil {
 			return f
 		}
 	}
@@ -564,11 +580,15 @@ func (r *ReplaceText[O]) Flush() *shared.Fail {
 func (r *ReplaceText[O]) HasCommitted() bool { return r.out.HasCommitted() }
 
 // RecordEnd is passed on at once when nothing is carried; otherwise it
-// waits at the carry's end for the carried bytes to be written.
+// waits at the carry's end, beside any that wait already, for the carried
+// bytes to be written.
 func (r *ReplaceText[O]) RecordEnd() *shared.Fail {
 	if r.carry == "" {
 		return shared.RecordEnd(r.out)
 	}
-	r.mark = len(r.carry)
+	at := len(r.carry)
+	if n := len(r.marks); n == 0 || r.marks[n-1] != at {
+		r.marks = append(r.marks, at)
+	}
 	return nil
 }

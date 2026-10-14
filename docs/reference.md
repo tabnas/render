@@ -61,10 +61,12 @@ the open record whatever its fragments' sizes: a fragment at least as
 large as the budget no longer goes to the writer directly. So the text a
 run leaves behind when it fails part way ends with a whole record, the
 open one dropped with the buffer. A record that outgrows the hold
-(`DEFAULT_HOLD`, 16 MiB; `with_hold`) is written as it comes, with the
-whole records before it, and a failure inside it cuts it: one huge
-record (a document whose root holds one value) costs a bounded buffer,
-not its size. Retention is then bounded by the budget and the hold
+(`DEFAULT_HOLD`, 16 MiB; `with_hold`) is written as it comes, and a
+failure inside it cuts it: the buffer goes first, with the whole records
+before it, then the fragment that outgrew the hold, which the buffer
+never takes, so one huge record (a document whose root holds one value,
+or one field or string bigger than the hold) costs a bounded buffer, not
+its size. Retention is then bounded by the budget and the hold
 together. Before the first record end the buffer is drained as above, so
 a text marks one where its first record begins, as the CSV and JSON
 renderers mark where their text begins; a mark on an empty buffer writes
@@ -94,11 +96,13 @@ the text is chunked: at most `from.len() - 1` bytes (the longest suffix
 seen that is a proper prefix of `from`) are carried between fragments.
 `flush` writes the carry out, so a flush is a boundary no match can span.
 An empty `from` matches nothing and the text passes through unchanged. A
-record end is no boundary for a match, so marks change no text: one that
-arrives while bytes are carried waits with them, and is passed on where
-it falls once they are written, before a match that begins there and
-after one that ends there. One that falls inside a match is dropped, and
-the two records it parted end together at the next mark.
+record end is no boundary for a match, so marks change no text: those
+that arrive while bytes are carried wait with them, each at its own
+offset, and are passed on where they fall once the bytes are written,
+before a match that begins there and after one that ends there. One that
+falls inside a match is dropped, and the two records it parted end
+together at the next mark. At most one waits at each offset of the
+carry, so the marks are as bounded as the carry is.
 
 ## CSV (`rs/src/csv.rs`)
 
