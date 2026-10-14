@@ -22,6 +22,12 @@ events	options	expected
 [{"schema":["名"]},{"row":["héllo 日本語 🚀"]},"end"]	{}	"名"\r\n"héllo 日本語 🚀"\r\n
 [{"schema":["a","b"]},{"row":[false,true]},"end"]	{}	"a","b"\r\n"false","true"\r\n
 [{"schema":["a","b"]},{"row":["\t","=1+2"]},"end"]	{}	"a","b"\r\n"\t","=1+2"\r\n
+# Record ends: the renderer marks one where its text begins, at the schema,
+# then after the header line, where there is one, and after each row.
+# marks is the fixture's own field, not a renderer option: its text is
+# written where each falls.
+[{"schema":["a","b"]},{"row":["x",{"num":"1"}]},{"row":["y","z"]},"end"]	{"marks":"|"}	|"a","b"\r\n|"x","1"\r\n|"y","z"\r\n|
+[{"schema":["a"]},{"row":["x"]},"end"]	{"marks":"|","header":false}	|"x"\r\n|
 # Numbers: a lexeme is written as it is; a value alone takes the shortest form.
 [{"schema":["z","b","big","bigger","tiny"]},{"row":[{"value":"0"},{"value":"50.25"},{"value":"1e20"},{"value":"1e21"},{"value":"1e-300"}]},"end"]	{}	"z","b","big","bigger","tiny"\r\n"0","50.25","100000000000000000000","1e21","1e-300"\r\n
 [{"schema":["a","b","c","d"]},{"row":[{"num":"123456789012345678901234567890"},{"num":"0.1000000000000000055511151231257827"},{"num":"-1.5E+308"},{"num":"50.250"}]},"end"]	{}	"a","b","c","d"\r\n"123456789012345678901234567890","0.1000000000000000055511151231257827","-1.5E+308","50.250"\r\n

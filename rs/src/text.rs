@@ -26,13 +26,29 @@ pub use tabnas_alchemy::shared::text::TextOut;
 /// invisible in a process's memory.
 pub const DEFAULT_BUDGET: usize = 32 * 1024;
 
+/// The default hold of a [`WriteOut`]: the longest record it keeps back
+/// until the record's end is marked. A record longer than this is written
+/// as it comes, so that one huge record (a document whose root holds one
+/// value) costs a bounded buffer rather than its whole size.
+pub const DEFAULT_HOLD: usize = 16 * 1024 * 1024;
+
 /// Coalesces fragments and writes them to an [`io::Write`].
 ///
-/// Retention is bounded by the budget: the buffer never holds more than
-/// `budget` bytes, and a fragment at least as large as the budget goes to
-/// the writer directly, after whatever was buffered before it. The output
-/// limit is checked on every fragment BEFORE it is accepted, counting the
-/// bytes buffered as well as the bytes written, so a run that would exceed
+/// Until a record end is marked ([`TextOut::record_end`]), retention is
+/// bounded by the budget: the buffer never holds more than `budget` bytes,
+/// and a fragment at least as large as the budget goes to the writer
+/// directly, after whatever was buffered before it. From the first record
+/// end on, the buffer is drained only at a record end, once it holds at
+/// least `budget` bytes, so the text a run leaves behind when it fails
+/// part way ends with a whole record: a failure drops the buffer, and with
+/// it the record that was being written. A record that outgrows the hold
+/// ([`DEFAULT_HOLD`] unless [`with_hold`](Self::with_hold) says) is
+/// written as it comes, the fragment that outgrows it going to the writer
+/// directly after the buffer, and a failure inside it cuts it; the buffer
+/// never holds more of an open record than the hold, so retention is
+/// bounded by the budget and the hold together. The output limit is
+/// checked on every fragment BEFORE it is accepted, counting the bytes
+/// buffered as well as the bytes written, so a run that would exceed
 /// `max_output_bytes` fails without emitting the fragment that crossed the
 /// line. `output_bytes` in the shared [`Metrics`] counts bytes the writer
 /// accepted, which is what "written to the output" means to a caller
@@ -43,6 +59,7 @@ pub struct WriteOut<W: io::Write> {
     writer: W,
     buf: Vec<u8>,
     budget: usize,
+    hold: usize,
     max_output_bytes: Option<u64>,
     metrics: Option<Arc<Metrics>>,
     /// Bytes accepted: buffered or written.
@@ -52,6 +69,12 @@ pub struct WriteOut<W: io::Write> {
     /// failed is counted for the part it took. Nonzero means a later
     /// failure finds committed output.
     committed: u64,
+    /// Whether a record end has been marked: from the first, the buffer is
+    /// drained only at a record end.
+    records: bool,
+    /// Where the open record begins in the buffer: the bytes before it are
+    /// whole records.
+    mark: usize,
 }
 
 impl<W: io::Write> WriteOut<W> {
@@ -60,17 +83,30 @@ impl<W: io::Write> WriteOut<W> {
             writer,
             buf: Vec::new(),
             budget: DEFAULT_BUDGET,
+            hold: DEFAULT_HOLD,
             max_output_bytes: None,
             metrics: None,
             accepted: 0,
             committed: 0,
+            records: false,
+            mark: 0,
         }
     }
 
     /// The coalescing budget in bytes. Zero means every fragment is written
-    /// as it arrives, which is what a test of the writer's ordering wants.
+    /// as it arrives, which is what a test of the writer's ordering wants;
+    /// once records are marked, it means every record is written as it
+    /// ends.
     pub fn with_budget(mut self, budget: usize) -> Self {
         self.budget = budget;
+        self
+    }
+
+    /// The longest record, in bytes, held back until its end is marked; a
+    /// longer one is written as it comes. Zero holds nothing, so marks
+    /// change nothing.
+    pub fn with_hold(mut self, hold: usize) -> Self {
+        self.hold = hold;
         self
     }
 
@@ -158,7 +194,10 @@ impl<W: io::Write> WriteOut<W> {
         Ok(())
     }
 
+    /// Send the whole buffer, which holds no open record afterwards: it is
+    /// empty whether the send succeeded or failed.
     fn drain(&mut self) -> Result<(), Fail> {
+        self.mark = 0;
         if self.buf.is_empty() {
             return Ok(());
         }
@@ -189,6 +228,20 @@ impl<W: io::Write> TextOut for WriteOut<W> {
                 return Err(if self.committed > 0 { f.committed() } else { f });
             }
         }
+        if self.records {
+            // The open record is held until its end. One that outgrows the
+            // hold is written as it comes: the buffer goes first, then the
+            // fragment that outgrew it, which the buffer never takes, so the
+            // buffer never grows past the hold.
+            if self.buf.len() - self.mark + s.len() > self.hold {
+                self.drain()?;
+                self.send(s.as_bytes())?;
+            } else {
+                self.buf.extend_from_slice(s.as_bytes());
+            }
+            self.accepted += len;
+            return Ok(());
+        }
         if self.buf.len() + s.len() > self.budget {
             self.drain()?;
         }
@@ -208,6 +261,18 @@ impl<W: io::Write> TextOut for WriteOut<W> {
 
     fn has_committed(&self) -> bool {
         self.committed > 0
+    }
+
+    /// The buffer now ends with a whole record: it is drained if it holds
+    /// the budget, and kept otherwise, the open record starting after it.
+    fn record_end(&mut self) -> Result<(), Fail> {
+        self.records = true;
+        if self.buf.len() >= self.budget {
+            self.drain()
+        } else {
+            self.mark = self.buf.len();
+            Ok(())
+        }
     }
 }
 
@@ -339,6 +404,12 @@ impl<O: TextOut> TextOut for Join<O> {
     fn has_committed(&self) -> bool {
         self.out.has_committed()
     }
+
+    /// Passed on as it is: the separator of the next item is written when
+    /// that item starts, after the mark, so it belongs to the next record.
+    fn record_end(&mut self) -> Result<(), Fail> {
+        self.out.record_end()
+    }
 }
 
 /// Concatenation: a [`Join`] with no separator, under the name the design
@@ -388,6 +459,10 @@ impl<O: TextOut> TextOut for Concat<O> {
     fn has_committed(&self) -> bool {
         self.0.has_committed()
     }
+
+    fn record_end(&mut self) -> Result<(), Fail> {
+        self.0.record_end()
+    }
 }
 
 /// Replaces every occurrence of a fixed literal, across fragment
@@ -402,11 +477,22 @@ impl<O: TextOut> TextOut for Concat<O> {
 /// boundary; the renderer's single flush at the end of a document is what
 /// makes that safe. An empty literal matches nothing and the text passes
 /// through unchanged, the one well-defined meaning it can have in a stream.
+///
+/// A record end is no boundary for a match, so marks change no text.
+/// Record ends that arrive while bytes are carried wait with them, each
+/// at its own offset, and are passed on where they fall once the bytes are
+/// written: before a match that begins there, after one that ends there.
+/// One that falls inside a match is dropped, the two records it parted
+/// ending together at the next mark. At most one waits at each offset of
+/// the carry, so they are as bounded as the carry is.
 pub struct ReplaceText<O: TextOut> {
     out: O,
     from: Box<str>,
     to: Box<str>,
     carry: String,
+    /// Record ends at these offsets into the carry, ascending, waiting for
+    /// the carried bytes to be written.
+    marks: Vec<usize>,
 }
 
 impl<O: TextOut> ReplaceText<O> {
@@ -416,6 +502,7 @@ impl<O: TextOut> ReplaceText<O> {
             from: from.into(),
             to: to.into(),
             carry: String::new(),
+            marks: Vec::new(),
         }
     }
 
@@ -435,35 +522,71 @@ impl<O: TextOut> ReplaceText<O> {
             .unwrap_or(0)
     }
 
-    fn scan(&mut self, text: &str) -> Result<(), Fail> {
+    /// Write `s`, which begins `at` bytes into the text being scanned,
+    /// with the waiting record ends from `marks[*next]` on where they fall
+    /// within it, its end included; `next` moves past the ones passed on.
+    fn emit(&mut self, s: &str, at: usize, marks: &[usize], next: &mut usize) -> Result<(), Fail> {
+        let mut from = 0;
+        while let Some(&m) = marks.get(*next) {
+            if m > at + s.len() {
+                break;
+            }
+            *next += 1;
+            // Each mark was set at a fragment's end and `at` is a match's end
+            // or the text's start, so the cut is on a char boundary; the
+            // checked form keeps the guarantee without a panic path.
+            let cut = m.saturating_sub(at).max(from);
+            let piece = s.get(from..cut).unwrap_or("");
+            if !piece.is_empty() {
+                self.out.write_str(piece)?;
+            }
+            self.out.record_end()?;
+            from = cut;
+        }
+        let rest = s.get(from..).unwrap_or("");
+        if !rest.is_empty() {
+            self.out.write_str(rest)?;
+        }
+        Ok(())
+    }
+
+    /// Replace the matches in `text`, with record ends waiting at `marks`,
+    /// and carry what could still begin one.
+    fn scan(&mut self, text: &str, mut marks: Vec<usize>) -> Result<(), Fail> {
+        let mut next = 0;
         let mut rest = text;
+        let mut at = 0;
         while let Some(i) = rest.find(&*self.from) {
-            if i > 0 {
-                self.out.write_str(&rest[..i])?;
+            self.emit(&rest[..i], at, &marks, &mut next)?;
+            let start = at + i;
+            let end = start + self.from.len();
+            while marks.get(next).is_some_and(|&m| m > start && m < end) {
+                next += 1;
             }
             if !self.to.is_empty() {
                 self.out.write_str(&self.to)?;
             }
             rest = &rest[i + self.from.len()..];
+            at = end;
         }
         let keep = self.pending_len(rest);
         // `pending_len` returns the length of a suffix of `rest` that equals a
         // prefix of the literal beginning with a character's first byte, so
         // the split lands on a char boundary; the checked form keeps the
         // guarantee without a panic path.
-        match rest.split_at_checked(rest.len() - keep) {
-            Some((emit, pending)) => {
-                if !emit.is_empty() {
-                    self.out.write_str(emit)?;
-                }
-                self.carry.clear();
-                self.carry.push_str(pending);
-            }
-            None => {
-                self.out.write_str(rest)?;
-                self.carry.clear();
-            }
+        let (written, pending) = rest
+            .split_at_checked(rest.len() - keep)
+            .unwrap_or((rest, ""));
+        self.emit(written, at, &marks, &mut next)?;
+        let at = at + written.len();
+        self.carry.clear();
+        self.carry.push_str(pending);
+        // The marks still waiting lie inside the carry, and move with it.
+        marks.drain(..next);
+        for m in &mut marks {
+            *m = m.saturating_sub(at);
         }
+        self.marks = marks;
         Ok(())
     }
 }
@@ -473,19 +596,21 @@ impl<O: TextOut> TextOut for ReplaceText<O> {
         if self.from.is_empty() {
             return self.out.write_str(s);
         }
+        let marks = std::mem::take(&mut self.marks);
         if self.carry.is_empty() {
-            self.scan(s)
+            self.scan(s, marks)
         } else {
             let mut text = std::mem::take(&mut self.carry);
             text.push_str(s);
-            self.scan(&text)
+            self.scan(&text, marks)
         }
     }
 
     fn flush(&mut self) -> Result<(), Fail> {
         if !self.carry.is_empty() {
             let pending = std::mem::take(&mut self.carry);
-            self.out.write_str(&pending)?;
+            let marks = std::mem::take(&mut self.marks);
+            self.emit(&pending, 0, &marks, &mut 0)?;
         }
         self.out.flush()
     }
@@ -493,6 +618,21 @@ impl<O: TextOut> TextOut for ReplaceText<O> {
     /// The carry has not gone anywhere; only the output beneath knows.
     fn has_committed(&self) -> bool {
         self.out.has_committed()
+    }
+
+    /// Passed on at once when nothing is carried; otherwise it waits at
+    /// the carry's end, beside any that wait already, for the carried
+    /// bytes to be written.
+    fn record_end(&mut self) -> Result<(), Fail> {
+        if self.carry.is_empty() {
+            self.out.record_end()
+        } else {
+            let at = self.carry.len();
+            if self.marks.last() != Some(&at) {
+                self.marks.push(at);
+            }
+            Ok(())
+        }
     }
 }
 

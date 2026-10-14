@@ -26,6 +26,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tabnas/alchemy/go/shared"
 	support "github.com/tabnas/support/go"
 	tt "github.com/tabnas/transduce/go"
 )
@@ -387,9 +388,48 @@ func feedJSON(sink tt.Sink, events []tt.Event) *tt.Fail {
 
 // The runners.
 
+// marked is the output a renderer's fixture row writes to: the text,
+// kept, with the row's marks written where the renderer marks the end of
+// a record. marks is the fixture's own field, not a renderer option: a
+// row that gives it pins where the marks fall, and one that does not
+// reads the text alone.
+type marked struct {
+	text  strings.Builder
+	marks *string
+}
+
+func newMarked(row *support.Row) *marked {
+	m := &marked{}
+	if o, ok := jsonColumn(row, "options", "{}").(map[string]any); ok {
+		if v, ok := o["marks"]; ok {
+			s, isString := v.(string)
+			if !isString {
+				badCell("marks %v", v)
+			}
+			m.marks = &s
+		}
+	}
+	return m
+}
+
+func (m *marked) WriteStr(s string) *tt.Fail {
+	m.text.WriteString(s)
+	return nil
+}
+
+func (m *marked) Flush() *tt.Fail    { return nil }
+func (m *marked) HasCommitted() bool { return m.text.Len() > 0 }
+
+func (m *marked) RecordEnd() *tt.Fail {
+	if m.marks != nil {
+		m.text.WriteString(*m.marks)
+	}
+	return nil
+}
+
 func csvOptions(row *support.Row) CSVOptions {
 	o := object(jsonColumn(row, "options", "{}"), "options",
-		"delimiter", "newline", "header", "null_text", "missing", "quoting")
+		"delimiter", "newline", "header", "null_text", "missing", "quoting", "marks")
 	options := DefaultCSVOptions()
 	if d, ok := o["delimiter"]; ok {
 		runes := []rune(text(d))
@@ -437,19 +477,19 @@ func csvOptions(row *support.Row) CSVOptions {
 func TestSpecCSV(t *testing.T) {
 	runSpec(t, "csv.tsv", "events", true, func(row *support.Row) (any, *tt.Fail) {
 		events := tableEvents(jsonColumn(row, "events", ""))
-		r, f := NewCSVRenderer(NewStringOut(), csvOptions(row))
+		r, f := NewCSVRenderer(newMarked(row), csvOptions(row))
 		if f != nil {
 			return nil, f
 		}
 		if f := feedTable(r, events); f != nil {
 			return nil, f
 		}
-		return r.Inner().String(), nil
+		return r.Inner().text.String(), nil
 	})
 }
 
 func jsonOptions(row *support.Row) JSONOptions {
-	o := object(jsonColumn(row, "options", "{}"), "options", "indent", "trailing_newline")
+	o := object(jsonColumn(row, "options", "{}"), "options", "indent", "trailing_newline", "marks")
 	var options JSONOptions
 	if n, ok := o["indent"]; ok && n != nil {
 		options.Indent = int(uintField(n, "indent"))
@@ -467,11 +507,11 @@ func jsonOptions(row *support.Row) JSONOptions {
 func TestSpecJSON(t *testing.T) {
 	runSpec(t, "json.tsv", "events", true, func(row *support.Row) (any, *tt.Fail) {
 		events := jsonEvents(jsonColumn(row, "events", ""))
-		r := NewJSONRenderer(NewStringOut(), jsonOptions(row))
+		r := NewJSONRenderer(newMarked(row), jsonOptions(row))
 		if f := feedJSON(r, events); f != nil {
 			return nil, f
 		}
-		return r.Inner().String(), nil
+		return r.Inner().text.String(), nil
 	})
 }
 
@@ -572,10 +612,13 @@ type textTop struct {
 // buildText builds the stack: the writer, then the stages from the
 // innermost (the last listed) outwards.
 func buildText(row *support.Row, rec *chunkRecorder) textTop {
-	pipeline := object(jsonColumn(row, "pipeline", "{}"), "pipeline", "budget", "limit", "stages")
+	pipeline := object(jsonColumn(row, "pipeline", "{}"), "pipeline", "budget", "hold", "limit", "stages")
 	w := NewWriteOut(rec)
 	if b, ok := pipeline["budget"]; ok {
 		w.WithBudget(int(uintField(b, "budget")))
+	}
+	if h, ok := pipeline["hold"]; ok {
+		w.WithHold(int(uintField(h, "hold")))
 	}
 	if l, ok := pipeline["limit"]; ok {
 		limit := uintField(l, "limit")
@@ -645,6 +688,8 @@ func TestSpecText(t *testing.T) {
 					}
 				case "flush":
 					f = top.out.Flush()
+				case "record":
+					f = shared.RecordEnd(top.out)
 				default:
 					badCell("%v is not an operation", op)
 				}

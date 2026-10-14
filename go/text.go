@@ -29,15 +29,30 @@ import (
 // enough to be invisible in a process's memory.
 const DefaultBudget = 32 * 1024
 
+// DefaultHold is the default hold of a WriteOut: the longest record it
+// keeps back until the record's end is marked. A record longer than this
+// is written as it comes, so that one huge record (a document whose root
+// holds one value) costs a bounded buffer rather than its whole size.
+const DefaultHold = 16 * 1024 * 1024
+
 // errWriteZero is a writer that took nothing and reported no error, which
 // Rust's write_all calls WriteZero.
 var errWriteZero = errors.New("failed to write whole buffer")
 
 // WriteOut coalesces fragments and writes them to an io.Writer.
 //
-// Retention is bounded by the budget: the buffer never holds more than
-// budget bytes, and a fragment at least as large as the budget goes to
-// the writer directly, after whatever was buffered before it. A
+// Until a record end is marked (RecordEnd), retention is bounded by the
+// budget: the buffer never holds more than budget bytes, and a fragment
+// at least as large as the budget goes to the writer directly, after
+// whatever was buffered before it. From the first record end on, the
+// buffer is drained only at a record end, once it holds at least budget
+// bytes, so the text a run leaves behind when it fails part way ends with
+// a whole record: a failure drops the buffer, and with it the record that
+// was being written. A record that outgrows the hold (DefaultHold unless
+// WithHold says) is written as it comes, the fragment that outgrows it
+// going to the writer directly after the buffer, and a failure inside it
+// cuts it; the buffer never holds more of an open record than the hold, so
+// retention is bounded by the budget and the hold together. A
 // zero-length fragment is never a write. The output limit is checked on
 // every fragment BEFORE it is accepted, counting the bytes buffered as
 // well as the bytes written (UTF-8 bytes, as Go strings are), so a run
@@ -52,27 +67,46 @@ type WriteOut struct {
 	writer         io.Writer
 	buf            []byte
 	budget         int
+	hold           int
 	maxOutputBytes *uint64
 	metrics        *shared.Metrics
 	// accepted is the bytes taken in: buffered or written.
 	accepted uint64
 	// committed is the bytes the writer accepted, counted write by write.
 	committed uint64
+	// records says a record end has been marked: from the first, the
+	// buffer is drained only at a record end.
+	records bool
+	// mark is where the open record begins in the buffer: the bytes
+	// before it are whole records.
+	mark int
 }
 
-// NewWriteOut is a WriteOut over w with the default budget, no limit and
-// no metrics.
+// NewWriteOut is a WriteOut over w with the default budget and hold, no
+// limit and no metrics.
 func NewWriteOut(w io.Writer) *WriteOut {
-	return &WriteOut{writer: w, budget: DefaultBudget}
+	return &WriteOut{writer: w, budget: DefaultBudget, hold: DefaultHold}
 }
 
 // WithBudget sets the coalescing budget in bytes. Zero means every
-// non-empty fragment is written as it arrives. A negative budget is zero.
+// non-empty fragment is written as it arrives; once records are marked,
+// it means every record is written as it ends. A negative budget is zero.
 func (o *WriteOut) WithBudget(budget int) *WriteOut {
 	if budget < 0 {
 		budget = 0
 	}
 	o.budget = budget
+	return o
+}
+
+// WithHold sets the longest record, in bytes, held back until its end is
+// marked; a longer one is written as it comes. Zero holds nothing, so
+// marks change nothing. A negative hold is zero.
+func (o *WriteOut) WithHold(hold int) *WriteOut {
+	if hold < 0 {
+		hold = 0
+	}
+	o.hold = hold
 	return o
 }
 
@@ -149,7 +183,10 @@ func (o *WriteOut) send(b []byte) *shared.Fail {
 	return nil
 }
 
+// drain sends the whole buffer, which holds no open record afterwards: it
+// is empty whether the send succeeded or failed.
 func (o *WriteOut) drain() *shared.Fail {
+	o.mark = 0
 	if len(o.buf) == 0 {
 		return nil
 	}
@@ -174,6 +211,26 @@ func (o *WriteOut) WriteStr(s string) *shared.Fail {
 			}
 			return f
 		}
+	}
+	if o.records {
+		// The open record is held until its end. One that outgrows the
+		// hold is written as it comes: the buffer goes first, then the
+		// fragment that outgrew it, which the buffer never takes, so the
+		// buffer never grows past the hold.
+		if len(o.buf)-o.mark+len(s) > o.hold {
+			if f := o.drain(); f != nil {
+				return f
+			}
+			if len(s) > 0 {
+				if f := o.send([]byte(s)); f != nil {
+					return f
+				}
+			}
+		} else {
+			o.buf = append(o.buf, s...)
+		}
+		o.accepted += n
+		return nil
 	}
 	if len(o.buf)+len(s) > o.budget {
 		if f := o.drain(); f != nil {
@@ -210,6 +267,18 @@ func (o *WriteOut) Flush() *shared.Fail {
 // HasCommitted answers from the bytes the writer received: a fragment
 // that is still buffered is not committed.
 func (o *WriteOut) HasCommitted() bool { return o.committed > 0 }
+
+// RecordEnd says the buffer now ends with a whole record: it is drained
+// if it holds the budget, and kept otherwise, the open record starting
+// after it.
+func (o *WriteOut) RecordEnd() *shared.Fail {
+	o.records = true
+	if len(o.buf) >= o.budget {
+		return o.drain()
+	}
+	o.mark = len(o.buf)
+	return nil
+}
 
 // StringOut is a TextOut that keeps the text, for tests and small
 // results.
@@ -311,6 +380,11 @@ func (j *Join[O]) Flush() *shared.Fail { return j.out.Flush() }
 // HasCommitted asks the output beneath.
 func (j *Join[O]) HasCommitted() bool { return j.out.HasCommitted() }
 
+// RecordEnd is passed on as it is: the separator of the next item is
+// written when that item starts, after the mark, so it belongs to the
+// next record.
+func (j *Join[O]) RecordEnd() *shared.Fail { return shared.RecordEnd(j.out) }
+
 // Concat is concatenation: a Join with no separator, under the name the
 // design brief and the language give it. The item markers are accepted
 // and counted all the same, so the interpreter's concat and join share
@@ -345,6 +419,9 @@ func (c *Concat[O]) Flush() *shared.Fail { return c.join.Flush() }
 // HasCommitted asks the output beneath.
 func (c *Concat[O]) HasCommitted() bool { return c.join.HasCommitted() }
 
+// RecordEnd is passed on; see Join.RecordEnd.
+func (c *Concat[O]) RecordEnd() *shared.Fail { return c.join.RecordEnd() }
+
 // ReplaceText replaces every occurrence of a fixed literal, across
 // fragment boundaries.
 //
@@ -356,11 +433,22 @@ func (c *Concat[O]) HasCommitted() bool { return c.join.HasCommitted() }
 // nothing can complete it once the caller has declared the text at a
 // boundary. An empty literal matches nothing and the text passes through
 // unchanged.
+//
+// A record end is no boundary for a match, so marks change no text.
+// Record ends that arrive while bytes are carried wait with them, each at
+// its own offset, and are passed on where they fall once the bytes are
+// written: before a match that begins there, after one that ends there.
+// One that falls inside a match is dropped, the two records it parted
+// ending together at the next mark. At most one waits at each offset of
+// the carry, so they are as bounded as the carry is.
 type ReplaceText[O TextOut] struct {
 	out   O
 	from  string
 	to    string
 	carry string
+	// marks are record ends at these offsets into the carry, ascending,
+	// waiting for the carried bytes to be written.
+	marks []int
 }
 
 // NewReplaceText is a ReplaceText over out.
@@ -388,17 +476,53 @@ func (r *ReplaceText[O]) pendingLen(rest string) int {
 	return 0
 }
 
-func (r *ReplaceText[O]) scan(text string) *shared.Fail {
+// emit writes s, which begins at bytes into the text being scanned, with
+// the waiting record ends from marks[next] on where they fall within it,
+// its end included. It answers the index of the first mark still waiting.
+func (r *ReplaceText[O]) emit(s string, at int, marks []int, next int) (int, *shared.Fail) {
+	from := 0
+	for ; next < len(marks) && marks[next] <= at+len(s); next++ {
+		cut := marks[next] - at
+		if cut < from {
+			cut = from
+		}
+		if piece := s[from:cut]; piece != "" {
+			if f := r.out.WriteStr(piece); f != nil {
+				return next, f
+			}
+		}
+		if f := shared.RecordEnd(r.out); f != nil {
+			return next, f
+		}
+		from = cut
+	}
+	if rest := s[from:]; rest != "" {
+		if f := r.out.WriteStr(rest); f != nil {
+			return next, f
+		}
+	}
+	return next, nil
+}
+
+// scan replaces the matches in text, with record ends waiting at marks,
+// and carries what could still begin one.
+func (r *ReplaceText[O]) scan(text string, marks []int) *shared.Fail {
+	next := 0
 	rest := text
+	at := 0
+	var f *shared.Fail
 	for {
 		i := strings.Index(rest, r.from)
 		if i < 0 {
 			break
 		}
-		if i > 0 {
-			if f := r.out.WriteStr(rest[:i]); f != nil {
-				return f
-			}
+		if next, f = r.emit(rest[:i], at, marks, next); f != nil {
+			return f
+		}
+		start := at + i
+		end := start + len(r.from)
+		for next < len(marks) && marks[next] > start && marks[next] < end {
+			next++
 		}
 		if r.to != "" {
 			if f := r.out.WriteStr(r.to); f != nil {
@@ -406,16 +530,22 @@ func (r *ReplaceText[O]) scan(text string) *shared.Fail {
 			}
 		}
 		rest = rest[i+len(r.from):]
+		at = end
 	}
 	keep := r.pendingLen(rest)
-	emit := rest[:len(rest)-keep]
-	if emit != "" {
-		if f := r.out.WriteStr(emit); f != nil {
-			return f
-		}
+	written := rest[:len(rest)-keep]
+	if next, f = r.emit(written, at, marks, next); f != nil {
+		return f
 	}
 	// A copy, so the carry never pins the fragment it was cut from.
 	r.carry = strings.Clone(rest[len(rest)-keep:])
+	// The marks still waiting lie inside the carry, and move with it.
+	base := at + len(written)
+	waiting := marks[:0]
+	for _, m := range marks[next:] {
+		waiting = append(waiting, m-base)
+	}
+	r.marks = waiting
 	return nil
 }
 
@@ -424,20 +554,22 @@ func (r *ReplaceText[O]) WriteStr(s string) *shared.Fail {
 	if r.from == "" {
 		return r.out.WriteStr(s)
 	}
+	marks := r.marks
+	r.marks = nil
 	if r.carry == "" {
-		return r.scan(s)
+		return r.scan(s, marks)
 	}
 	text := r.carry + s
 	r.carry = ""
-	return r.scan(text)
+	return r.scan(text, marks)
 }
 
 // Flush writes the carry out, then flushes the output beneath.
 func (r *ReplaceText[O]) Flush() *shared.Fail {
 	if r.carry != "" {
-		pending := r.carry
-		r.carry = ""
-		if f := r.out.WriteStr(pending); f != nil {
+		pending, marks := r.carry, r.marks
+		r.carry, r.marks = "", nil
+		if _, f := r.emit(pending, 0, marks, 0); f != nil {
 			return f
 		}
 	}
@@ -446,3 +578,17 @@ func (r *ReplaceText[O]) Flush() *shared.Fail {
 
 // HasCommitted asks the output beneath: the carry has not gone anywhere.
 func (r *ReplaceText[O]) HasCommitted() bool { return r.out.HasCommitted() }
+
+// RecordEnd is passed on at once when nothing is carried; otherwise it
+// waits at the carry's end, beside any that wait already, for the carried
+// bytes to be written.
+func (r *ReplaceText[O]) RecordEnd() *shared.Fail {
+	if r.carry == "" {
+		return shared.RecordEnd(r.out)
+	}
+	at := len(r.carry)
+	if n := len(r.marks); n == 0 || r.marks[n-1] != at {
+		r.marks = append(r.marks, at)
+	}
+	return nil
+}

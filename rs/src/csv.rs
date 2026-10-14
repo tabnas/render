@@ -117,6 +117,9 @@ impl<O: TextOut> CsvRenderer<O> {
         }
         self.labels = columns.iter().map(|c| c.label.clone()).collect();
         self.phase = Phase::Rows;
+        // The text begins on a record's boundary: a writer holds what
+        // follows, the header first, from its first byte.
+        self.out.record_end()?;
         if self.options.header {
             self.emitted = true;
             for (i, label) in self.labels.iter().enumerate() {
@@ -131,6 +134,8 @@ impl<O: TextOut> CsvRenderer<O> {
                 )?;
             }
             self.out.write_str(self.options.newline.as_str())?;
+            // The header is whole, and the rows are records.
+            self.out.record_end()?;
         }
         Ok(())
     }
@@ -184,7 +189,7 @@ impl<O: TextOut> CsvRenderer<O> {
         self.emitted = true;
         self.out.write_str(self.options.newline.as_str())?;
         self.rows += 1;
-        Ok(())
+        self.out.record_end()
     }
 
     /// Reject a row before any of it is written, so a row is rendered whole
@@ -279,6 +284,7 @@ fn write_field<O: TextOut>(
 mod tests {
     use super::*;
     use crate::text::{StringOut, WriteOut};
+    use tabnas_alchemy::shared::Limits;
 
     fn cols(labels: &[&str]) -> Vec<PublicColumn> {
         labels.iter().map(|l| PublicColumn::new(*l)).collect()
@@ -767,5 +773,32 @@ mod tests {
         assert_eq!(r.out.committed(), 10);
         let bytes = r.into_inner().into_inner();
         assert_eq!(bytes, b"\"a\"\r\n\"x\"\r\n");
+    }
+
+    #[test]
+    fn a_run_that_fails_part_way_leaves_whole_rows() {
+        // The output limit falls inside the second row: the writer holds
+        // a row until its end, so what reached it is the header and the
+        // first row, and nothing of the second.
+        let limits = Limits {
+            max_output_bytes: Some(25),
+            ..Limits::default()
+        };
+        let out = WriteOut::new(Vec::new())
+            .with_budget(0)
+            .with_limits(&limits);
+        let mut r = CsvRenderer::new(out, CsvOptions::default()).unwrap();
+        let columns = cols(&["a", "b"]);
+        r.table_event(TableEvent::Schema(&columns)).unwrap();
+        r.table_event(TableEvent::Row(&[s("x"), s("y")])).unwrap();
+        let err = r
+            .table_event(TableEvent::Row(&[s("long-value"), s("z")]))
+            .unwrap_err();
+        assert_eq!(err.code, Code::ResourceLimitExceeded);
+        assert!(err.committed_output);
+        assert_eq!(
+            r.into_inner().into_inner(),
+            b"\"a\",\"b\"\r\n\"x\",\"y\"\r\n".to_vec()
+        );
     }
 }

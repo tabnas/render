@@ -51,7 +51,9 @@ pub use json::{JsonOptions, JsonRenderer};
 pub use number::is_json_number;
 pub use records::{MissingRecord, RecordsToJson};
 pub use renderers::{renderers, RenderRenderers};
-pub use text::{Concat, Join, ReplaceText, StringOut, TextOut, WriteOut, DEFAULT_BUDGET};
+pub use text::{
+    Concat, Join, ReplaceText, StringOut, TextOut, WriteOut, DEFAULT_BUDGET, DEFAULT_HOLD,
+};
 
 /// This crate's version, as `Cargo.toml` declares it.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

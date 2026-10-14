@@ -13,7 +13,7 @@
 use std::path::{Path, PathBuf};
 
 use serde_json::Value as Json;
-use tabnas_render::is_json_number;
+use tabnas_render::{is_json_number, TextOut};
 use tabnas_support::{find_spec_dir, unescape, Failure, Row, Value};
 use tabnas_transduce::{Cell, Fail, OwnedJsonEvent, PublicColumn, Sink, TableEvent, TableSink};
 
@@ -239,5 +239,52 @@ pub fn known_fields(row: &Row, options: &Json, known: &[&str]) {
                 malformed(row, format!("unknown option {k:?}"));
             }
         }
+    }
+}
+
+/// The output a renderer's fixture row writes to: the text, kept, with the
+/// row's `marks` written where the renderer marks the end of a record.
+/// `marks` is the fixture's own field, not a renderer option: a row that
+/// gives it pins where the marks fall, and one that does not reads the
+/// text alone.
+pub struct Marked {
+    pub text: String,
+    marks: Option<String>,
+}
+
+impl Marked {
+    /// The output for `row`, its `marks` taken from the options object.
+    pub fn new(row: &Row, options: &Json) -> Marked {
+        let marks = match field(row, options, "marks") {
+            None => None,
+            Some(Json::String(s)) => Some(s.clone()),
+            Some(other) => malformed(row, format!("marks {other}")),
+        };
+        Marked {
+            text: String::new(),
+            marks,
+        }
+    }
+}
+
+impl TextOut for Marked {
+    fn write_str(&mut self, s: &str) -> Result<(), Fail> {
+        self.text.push_str(s);
+        Ok(())
+    }
+
+    fn flush(&mut self) -> Result<(), Fail> {
+        Ok(())
+    }
+
+    fn has_committed(&self) -> bool {
+        !self.text.is_empty()
+    }
+
+    fn record_end(&mut self) -> Result<(), Fail> {
+        if let Some(marks) = &self.marks {
+            self.text.push_str(marks);
+        }
+        Ok(())
     }
 }

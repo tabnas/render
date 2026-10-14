@@ -18,7 +18,17 @@ reports `committed_output` from it. The default answer is `true`, the
 conservative one for an output that cannot tell; `WriteOut` answers from
 the bytes its writer received, `StringOut` from whether it holds text,
 `Join` and `ReplaceText` ask the output beneath. `&mut O` and `Box<O>`
-are outputs when `O` is.
+are outputs when `O` is. `record_end() -> Result<(), Fail>` marks the end
+of a record: the text written so far ends with a whole record. Its
+default does nothing, which is right for an output that is the
+destination (`StringOut`) or holds the whole text; `WriteOut` holds a
+record's text until its end is marked, and the combinators pass the mark
+on. The CSV and JSON renderers mark where their text begins, so a
+writer holds it from its first byte; then the CSV renderer marks the end
+of the header and of each row, the JSON renderer the end of each value
+directly inside the root container and the root's own end, and alchemy
+marks each item `concat-map`
+writes and each `:record-end` a program answers among a `join`'s items.
 
 `WriteOut<W: io::Write>`: coalesces fragments into a buffer of at most
 `budget` bytes (`DEFAULT_BUDGET`, 32 KiB; `with_budget`). A fragment that
@@ -45,6 +55,23 @@ short write included, and a document that failed before its `End` does
 not reach the writer on the way out. A caller that wants the partial
 output anyway calls `flush()` first.
 
+From the first record end on (`record_end`), `WriteOut` drains the buffer
+only at a record end, once it holds at least `budget` bytes, and holds
+the open record whatever its fragments' sizes: a fragment at least as
+large as the budget no longer goes to the writer directly. So the text a
+run leaves behind when it fails part way ends with a whole record, the
+open one dropped with the buffer. A record that outgrows the hold
+(`DEFAULT_HOLD`, 16 MiB; `with_hold`) is written as it comes, and a
+failure inside it cuts it: the buffer goes first, with the whole records
+before it, then the fragment that outgrew the hold, which the buffer
+never takes, so one huge record (a document whose root holds one value,
+or one field or string bigger than the hold) costs a bounded buffer, not
+its size. Retention is then bounded by the budget and the hold
+together. Before the first record end the buffer is drained as above, so
+a text marks one where its first record begins, as the CSV and JSON
+renderers mark where their text begins; a mark on an empty buffer writes
+nothing. A budget of 0 writes each record as it ends.
+
 `StringOut`: keeps the text (`as_str`, `into_string`); for tests and small
 results.
 
@@ -54,7 +81,9 @@ fragments of one item; an item with no fragments is still an item, so two
 empty items joined with `,` are `,`. A fragment written outside an item is
 an item of its own. `item_start` inside an item and `item_end` with none
 open are `PROTOCOL_ORDER_ERROR`. `flush` flushes the output beneath and
-leaves an open item open.
+leaves an open item open. `record_end` is passed on as it is: the
+separator of the next item is written when that item starts, after the
+mark, so it belongs to the next record.
 
 `Concat<O>`: `new(out)`, a `Join` with no separator under the name the
 design brief and the language give it. Fragments are appended as they
@@ -66,7 +95,14 @@ interpreter's `concat` and `join` share one shape.
 the text is chunked: at most `from.len() - 1` bytes (the longest suffix
 seen that is a proper prefix of `from`) are carried between fragments.
 `flush` writes the carry out, so a flush is a boundary no match can span.
-An empty `from` matches nothing and the text passes through unchanged.
+An empty `from` matches nothing and the text passes through unchanged. A
+record end is no boundary for a match, so marks change no text: those
+that arrive while bytes are carried wait with them, each at its own
+offset, and are passed on where they fall once the bytes are written,
+before a match that begins there and after one that ends there. One that
+falls inside a match is dropped, and the two records it parted end
+together at the next mark. At most one waits at each offset of the
+carry, so the marks are as bounded as the carry is.
 
 ## CSV (`rs/src/csv.rs`)
 
@@ -102,6 +138,10 @@ implements `TableSink`:
   nothing; each number is formatted once, when the row is written.
 - `End` once, last; it flushes the output. Every record, the header and
   the last row included, ends with the newline.
+- The schema is marked with `record_end` where the text begins, before
+  the header, and so are the end of the header, where there is one, and
+  the end of each row, so a writer that holds records (`WriteOut`) holds
+  the header from its first byte and leaves whole rows behind a failure.
 - A second schema, a row before the schema or after the end, a row of the
   wrong width, an end before the schema or a second end:
   `PROTOCOL_ORDER_ERROR`.
@@ -144,7 +184,16 @@ value, any close at the root), and any event after `End`. Separators are
 written when the next item begins, never speculatively, and a number is
 validated before its separator, so the text written before a failure is a
 prefix of a valid document and a caller that carries on after a rejected
-value does not find `[1,,2]`.
+value does not find `[1,,2]`. The root value's beginning, the end of each
+value directly inside the root array or object (after the value, before
+the separator of the next) and the root value's end are marked with
+`record_end`, so a writer that holds records (`WriteOut`) leaves whole
+values behind a failure: a failure inside the second element of
+`[{"id":1},{"id":2}]` leaves `[{"id":1}`, one before the first element is
+whole leaves nothing, since the root's opening belongs to its first
+value, and one after the root has closed, as a source that refuses a
+second document fails, leaves the whole document. A root scalar is held
+whole.
 
 ## Records (`rs/src/records.rs`)
 
@@ -249,14 +298,18 @@ number cell or event: it cannot say whether it carries a lexeme.
 `true`, `false`, a JSON string, a number object, or `{"missing": true}`.
 CSV options: `delimiter` (one character), `newline` (`"crlf"` | `"lf"`),
 `header` (bool), `null_text` (string), `missing` (a string, or `null` for
-the error policy), `quoting` (`"always"` | `"minimal"`). Records options:
+the error policy), `quoting` (`"always"` | `"minimal"`), and `marks`, the
+fixture's own field rather than a renderer option: a string written where
+the renderer marks the end of a record, so a row pins where the marks
+fall. Records options:
 `missing` (`"skip"` | `"null"` | `"error"`). The CSV output is a
 `StringOut`, so a row without `"end"` pins the text written so far.
 
 **JSON events** (`json.tsv`): a JSON array of `"{"`, `"}"`, `"["`, `"]"`
 and `"end"` for the structural events, `{"key": k}`, `{"str": s}`,
 `null`, `true`, `false` and number objects. Options: `indent` (a count of
-spaces; `0` or `null` is compact) and `trailing_newline` (bool).
+spaces; `0` or `null` is compact), `trailing_newline` (bool) and `marks`,
+as for `csv.tsv`.
 
 **`number.tsv`** runs each number through the JSON renderer as a root
 scalar and through the CSV renderer as the one field of a minimally
@@ -280,14 +333,16 @@ than trusting its standard library:
   `1e2`.
 
 **`text.tsv`.** `pipeline` names the stack: `budget` (the coalescing
-budget in bytes, `DEFAULT_BUDGET` when absent), `limit`
+budget in bytes, `DEFAULT_BUDGET` when absent), `hold` (the longest
+record held back, `DEFAULT_HOLD` when absent), `limit`
 (`max_output_bytes`, none when absent) and `stages`, outermost first, each
 `{"join": "<separator>"}`, `{"concat": true}` or
 `{"replace": ["<from>", "<to>"]}`, over a `WriteOut` whose writer keeps
 each `write` call as one chunk and accepts it whole. `ops` is a script on
 the outermost stage: a string is a fragment, `{"op": "start"}` and
 `{"op": "end"}` are item markers (the outermost stage must then be a join
-or a concat), `{"op": "flush"}` flushes. The result is the chunks the
+or a concat), `{"op": "record"}` marks the end of a record,
+`{"op": "flush"}` flushes. The result is the chunks the
 writer received, in order, after the last operation, with nothing flushed
 for the row: what is still buffered or carried is not in it, as
 `into_inner` drops it. Chunk boundaries are part of the contract only
@@ -329,6 +384,21 @@ code; [`DIVERGENCE.md`](../DIVERGENCE.md) lists the Rust ones.
 - `Join`: a fragment outside an item is an item; unbalanced markers are
   protocol errors rather than panics.
 - `ReplaceText`: an empty literal is the identity; `flush` is a boundary.
+- Record ends (tabnas/alchemy#29) are marks a text makes, not a parse of
+  the text: a writer cannot tell where a record ends in a format it does
+  not read (a YAML item, a TOML table), and the text's maker can. A
+  record end is no boundary for `ReplaceText`, because one that was would
+  change the text of a `replace-text` over a marked text (a CSV whose
+  rows a literal spans), and marks exist to change what a failure leaves
+  behind, never what a success writes.
+- `WriteOut` turns to holding records at the first mark rather than from
+  its construction, so an output nobody marks behaves as it always has;
+  and it holds a record up to 16 MiB, then writes it as it comes, so a
+  document of one huge record (`{"data":[...]}`) cannot make the writer
+  hold the document. The CSV and JSON renderers mark where their text
+  begins so that the first record is held too, and the JSON renderer
+  leaves the root's opening to the first value inside it, so that a
+  failure before any value is whole leaves nothing behind.
 - `Quoting::Minimal` writes an empty field as nothing, so an empty string
   and an empty `null_text` read back the same; that is the dialect's
   trade-off, and `Always` is the standard profile for that reason.

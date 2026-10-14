@@ -35,6 +35,12 @@ export function hasCommitted(out: TextOut): boolean {
 // in a process's memory.
 export const DEFAULT_BUDGET = 32 * 1024
 
+// The default hold of a `WriteOut`: the longest record it keeps back until
+// the record's end is marked. A record longer than this is written as it
+// comes, so that one huge record (a document whose root holds one value)
+// costs a bounded buffer rather than its whole size.
+export const DEFAULT_HOLD = 16 * 1024 * 1024
+
 // A `Writer` that keeps every chunk it is given, for tests and small
 // results: the counterpart of writing into a `Vec<u8>`.
 export class BytesWriter implements Writer {
@@ -85,10 +91,20 @@ function message(err: unknown): string {
 
 // Coalesces fragments and writes them to a `Writer`.
 //
-// Retention is bounded by the budget: the buffer never holds more than
-// `budget` bytes, and a fragment at least as large as the budget goes to
-// the writer directly, after whatever was buffered before it. The output
-// limit is checked on every fragment BEFORE it is accepted, counting the
+// Until a record end is marked (`recordEnd`), retention is bounded by the
+// budget: the buffer never holds more than `budget` bytes, and a fragment
+// at least as large as the budget goes to the writer directly, after
+// whatever was buffered before it. From the first record end on, the
+// buffer is drained only at a record end, once it holds at least `budget`
+// bytes, so the text a run leaves behind when it fails part way ends with
+// a whole record: a failure drops the buffer, and with it the record that
+// was being written. A record that outgrows the hold (`DEFAULT_HOLD`
+// unless `withHold` says) is written as it comes, the fragment that
+// outgrows it going to the writer directly after the buffer, and a failure
+// inside it cuts it; the buffer never holds more of an open record than the
+// hold, so retention is bounded by the budget and the hold together.
+// The output limit is checked on every fragment BEFORE it is accepted,
+// counting the
 // bytes buffered as well as the bytes written, so a run that would exceed
 // `max_output_bytes` fails without emitting the fragment that crossed the
 // line. `output_bytes` in the shared `Metrics` counts bytes the writer
@@ -102,6 +118,7 @@ export class WriteOut<W extends Writer = Writer> implements TextOut {
   // Bytes in `buf`.
   private len = 0
   private budget = DEFAULT_BUDGET
+  private hold = DEFAULT_HOLD
   private maxOutputBytes: number | null = null
   private metrics: Metrics | null = null
   // Bytes accepted: buffered or written.
@@ -111,13 +128,20 @@ export class WriteOut<W extends Writer = Writer> implements TextOut {
   // counted for the part it took. Nonzero means a later failure finds
   // committed output.
   private committedBytes = 0
+  // Whether a record end has been marked: from the first, the buffer is
+  // drained only at a record end.
+  private records = false
+  // Where the open record begins in the buffer: the bytes before it are
+  // whole records.
+  private mark = 0
 
   constructor(writer: W) {
     this.writer = writer
   }
 
   // The coalescing budget in bytes. Zero means every fragment is written as
-  // it arrives, which is what a test of the writer's ordering wants.
+  // it arrives, which is what a test of the writer's ordering wants; once
+  // records are marked, it means every record is written as it ends.
   withBudget(budget: number): this {
     if (!Number.isInteger(budget) || budget < 0) {
       throw new TypeError(`a budget is a count of bytes, not ${budget}`)
@@ -125,6 +149,18 @@ export class WriteOut<W extends Writer = Writer> implements TextOut {
     this.budget = budget
     this.buf = null
     this.len = 0
+    this.mark = 0
+    return this
+  }
+
+  // The longest record, in bytes, held back until its end is marked; a
+  // longer one is written as it comes. Zero holds nothing, so marks change
+  // nothing.
+  withHold(hold: number): this {
+    if (!Number.isInteger(hold) || hold < 0) {
+      throw new TypeError(`a hold is a count of bytes, not ${hold}`)
+    }
+    this.hold = hold
     return this
   }
 
@@ -163,6 +199,7 @@ export class WriteOut<W extends Writer = Writer> implements TextOut {
   intoInner(): W {
     this.buf = null
     this.len = 0
+    this.mark = 0
     return this.writer
   }
 
@@ -200,7 +237,10 @@ export class WriteOut<W extends Writer = Writer> implements TextOut {
     }
   }
 
+  // Send the whole buffer, which holds no open record afterwards: it is
+  // empty whether the send succeeded or failed.
   private drain(): void {
+    this.mark = 0
     if (0 === this.len || null == this.buf) return
     // The buffer goes to the writer, which may keep it; the next fragment
     // starts a fresh one.
@@ -222,6 +262,20 @@ export class WriteOut<W extends Writer = Writer> implements TextOut {
       throw 0 < this.committedBytes ? f.committed() : f
     }
     if (0 === len) return
+    if (this.records) {
+      // The open record is held until its end. One that outgrows the hold
+      // is written as it comes: the buffer goes first, then the fragment
+      // that outgrew it, which the buffer never takes, so the buffer never
+      // grows past the hold.
+      if (this.len - this.mark + len > this.hold) {
+        this.drain()
+        this.send(Buffer.from(s, 'utf8'))
+      } else {
+        this.append(s, len)
+      }
+      this.acceptedBytes += len
+      return
+    }
     if (this.len + len > this.budget) this.drain()
     if (len >= this.budget) {
       this.send(Buffer.from(s, 'utf8'))
@@ -230,6 +284,27 @@ export class WriteOut<W extends Writer = Writer> implements TextOut {
       this.len += this.buf.write(s, this.len, 'utf8')
     }
     this.acceptedBytes += len
+  }
+
+  // Add `s`, `len` bytes, to the buffer, which grows past the budget to
+  // hold an open record.
+  private append(s: string, len: number): void {
+    const need = this.len + len
+    if (null == this.buf || this.buf.length < need) {
+      const size = Math.max(need, this.budget, null == this.buf ? 0 : 2 * this.buf.length)
+      const grown = Buffer.allocUnsafe(size)
+      if (null != this.buf && 0 < this.len) this.buf.copy(grown, 0, 0, this.len)
+      this.buf = grown
+    }
+    this.len += this.buf.write(s, this.len, 'utf8')
+  }
+
+  // The buffer now ends with a whole record: it is drained if it holds the
+  // budget, and kept otherwise, the open record starting after it.
+  recordEnd(): void {
+    this.records = true
+    if (this.len >= this.budget) this.drain()
+    else this.mark = this.len
   }
 
   flush(): void {
@@ -344,6 +419,12 @@ export class Join<O extends TextOut = TextOut> implements TextOut {
   hasCommitted(): boolean {
     return hasCommitted(this.out)
   }
+
+  // Passed on as it is: the separator of the next item is written when that
+  // item starts, after the mark, so it belongs to the next record.
+  recordEnd(): void {
+    this.out.recordEnd?.()
+  }
 }
 
 // Concatenation: a `Join` with no separator, under the name the design
@@ -391,6 +472,10 @@ export class Concat<O extends TextOut = TextOut> implements TextOut {
   hasCommitted(): boolean {
     return this.join.hasCommitted()
   }
+
+  recordEnd(): void {
+    this.join.recordEnd()
+  }
 }
 
 function isHighSurrogate(c: number): boolean {
@@ -409,12 +494,23 @@ function isHighSurrogate(c: number): boolean {
 // single flush at the end of a document is what makes that safe. An empty
 // literal matches nothing and the text passes through unchanged, the one
 // well-defined meaning it can have in a stream.
+//
+// A record end is no boundary for a match, so marks change no text. Record
+// ends that arrive while code units are carried wait with them, each at its
+// own offset, and are passed on where they fall once they are written:
+// before a match that begins there, after one that ends there. One that
+// falls inside a match is dropped, the two records it parted ending
+// together at the next mark. At most one waits at each offset of the carry,
+// so they are as bounded as the carry is.
 export class ReplaceText<O extends TextOut = TextOut> implements TextOut {
   private out: O
   private from: string
   private to: string
   // The carried suffix; exposed read-only for tests of the bound.
   private pending = ''
+  // Record ends at these offsets into the carry, in code units, ascending,
+  // waiting for the carried text to be written.
+  private marks: number[] = []
 
   constructor(out: O, from: string, to: string) {
     this.out = out
@@ -443,17 +539,46 @@ export class ReplaceText<O extends TextOut = TextOut> implements TextOut {
     return 0
   }
 
-  private scan(text: string): void {
+  // Write `s`, which begins `at` code units into the text being scanned,
+  // with the waiting record ends from `marks[next]` on where they fall
+  // within it, its end included. Answers the index of the first mark still
+  // waiting.
+  private emit(s: string, at: number, marks: number[], next: number): number {
+    let from = 0
+    for (; next < marks.length && marks[next] <= at + s.length; next++) {
+      const cut = Math.max(marks[next] - at, from)
+      const piece = s.slice(from, cut)
+      if ('' !== piece) this.out.writeStr(piece)
+      this.out.recordEnd?.()
+      from = cut
+    }
+    const rest = s.slice(from)
+    if ('' !== rest) this.out.writeStr(rest)
+    return next
+  }
+
+  // Replace the matches in `text`, with record ends waiting at `marks`, and
+  // carry what could still begin one.
+  private scan(text: string, marks: number[]): void {
+    let next = 0
     let rest = text
+    let at = 0
     for (let i = rest.indexOf(this.from); -1 !== i; i = rest.indexOf(this.from)) {
-      if (0 < i) this.out.writeStr(rest.slice(0, i))
+      next = this.emit(rest.slice(0, i), at, marks, next)
+      const start = at + i
+      const end = start + this.from.length
+      while (next < marks.length && marks[next] > start && marks[next] < end) next++
       if ('' !== this.to) this.out.writeStr(this.to)
       rest = rest.slice(i + this.from.length)
+      at = end
     }
     const keep = this.pendingLen(rest)
-    const emit = rest.slice(0, rest.length - keep)
-    if ('' !== emit) this.out.writeStr(emit)
+    const written = rest.slice(0, rest.length - keep)
+    next = this.emit(written, at, marks, next)
     this.pending = rest.slice(rest.length - keep)
+    // The marks still waiting lie inside the carry, and move with it.
+    const base = at + written.length
+    this.marks = marks.slice(next).map((m) => m - base)
   }
 
   writeStr(s: string): void {
@@ -461,20 +586,24 @@ export class ReplaceText<O extends TextOut = TextOut> implements TextOut {
       this.out.writeStr(s)
       return
     }
+    const marks = this.marks
+    this.marks = []
     if ('' === this.pending) {
-      this.scan(s)
+      this.scan(s, marks)
     } else {
       const text = this.pending + s
       this.pending = ''
-      this.scan(text)
+      this.scan(text, marks)
     }
   }
 
   flush(): void {
     if ('' !== this.pending) {
       const pending = this.pending
+      const marks = this.marks
       this.pending = ''
-      this.out.writeStr(pending)
+      this.marks = []
+      this.emit(pending, 0, marks, 0)
     }
     this.out.flush()
   }
@@ -482,5 +611,17 @@ export class ReplaceText<O extends TextOut = TextOut> implements TextOut {
   // The carry has not gone anywhere; only the output beneath knows.
   hasCommitted(): boolean {
     return hasCommitted(this.out)
+  }
+
+  // Passed on at once when nothing is carried; otherwise it waits at the
+  // carry's end, beside any that wait already, for the carried text to be
+  // written.
+  recordEnd(): void {
+    if ('' === this.pending) {
+      this.out.recordEnd?.()
+      return
+    }
+    const at = this.pending.length
+    if (at !== this.marks[this.marks.length - 1]) this.marks.push(at)
   }
 }

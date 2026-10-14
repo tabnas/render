@@ -294,11 +294,21 @@ func TestJSONCommittedOutputMeansBytesThatReachedTheWriter(t *testing.T) {
 	eq(t, f.CommittedOutput, false, "the bracket is only buffered")
 	eq(t, r.Inner().Committed(), 0, "committed bytes")
 
+	// With no budget the writer still holds the bracket, which belongs to
+	// the first value; once that value is whole, both reach it.
 	r = NewJSONRenderer(NewWriteOut(&bytes.Buffer{}).WithBudget(0), JSONOptions{})
 	_, f = r.Event(aS)
 	ok(t, f)
 	_, f = r.Event(key("k"))
-	eq(t, f.CommittedOutput, true, "the bracket reached the writer")
+	eq(t, f.CommittedOutput, false, "the bracket is held with its value")
+	r = NewJSONRenderer(NewWriteOut(&bytes.Buffer{}).WithBudget(0), JSONOptions{})
+	_, f = r.Event(aS)
+	ok(t, f)
+	_, f = r.Event(jb(true))
+	ok(t, f)
+	_, f = r.Event(key("k"))
+	eq(t, f.CommittedOutput, true, "the first value reached the writer")
+	eq(t, r.Inner().Committed(), 5, "committed bytes")
 }
 
 func TestJSONEndFlushesTheOutputAndNothingElseDoes(t *testing.T) {
@@ -316,4 +326,17 @@ func TestJSONEndFlushesTheOutputAndNothingElseDoes(t *testing.T) {
 	eq(t, r.IsDone(), true, "done")
 	eq(t, r.Inner().Committed(), 6, "committed")
 	eq(t, b.String(), "[true]", "text")
+}
+
+func TestJSONARunThatStopsPartWayLeavesWholeValues(t *testing.T) {
+	// The source failed inside the second object: the writer holds a value
+	// directly inside the root until it ends, so what reached it is the
+	// first object, whole, and nothing of the second.
+	var b bytes.Buffer
+	r := NewJSONRenderer(NewWriteOut(&b).WithBudget(0), JSONOptions{})
+	for _, ev := range evs(aS, oS, key("id"), tt.EvNumberLexeme(1, "1"), oE, oS, key("id"), tt.EvNumberLexeme(2, "2")) {
+		_, f := r.Event(ev)
+		ok(t, f)
+	}
+	eq(t, b.String(), `[{"id":1}`, "written")
 }

@@ -106,6 +106,11 @@ func (r *CSVRenderer[O]) schema(columns []shared.PublicColumn) *shared.Fail {
 		r.labels[i] = c.Label
 	}
 	r.phase = inRows
+	// The text begins on a record's boundary: a writer holds what follows,
+	// the header first, from its first byte.
+	if f := shared.RecordEnd(r.out); f != nil {
+		return f
+	}
 	if r.options.Header {
 		r.emitted = true
 		for i, label := range r.labels {
@@ -121,6 +126,8 @@ func (r *CSVRenderer[O]) schema(columns []shared.PublicColumn) *shared.Fail {
 		if f := r.out.WriteStr(r.options.Newline.String()); f != nil {
 			return f
 		}
+		// The header is whole, and the rows are records.
+		return shared.RecordEnd(r.out)
 	}
 	return nil
 }
@@ -184,7 +191,7 @@ func (r *CSVRenderer[O]) row(cells []shared.Cell) *shared.Fail {
 		return f
 	}
 	r.rows++
-	return nil
+	return shared.RecordEnd(r.out)
 }
 
 // check rejects a row before any of it is written, so a row is rendered

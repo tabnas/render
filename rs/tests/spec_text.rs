@@ -11,7 +11,7 @@ use std::io;
 use std::rc::Rc;
 
 use serde_json::Value as Json;
-use tabnas_render::{Concat, Join, ReplaceText, TextOut, WriteOut, DEFAULT_BUDGET};
+use tabnas_render::{Concat, Join, ReplaceText, TextOut, WriteOut, DEFAULT_BUDGET, DEFAULT_HOLD};
 use tabnas_support::{Row, Runner, Value};
 use tabnas_transduce::{Fail, Limits};
 
@@ -83,13 +83,19 @@ fn text(row: &Row, json: &Json) -> String {
 /// last listed) outwards.
 fn build(row: &Row, recorder: Recorder) -> Top {
     let pipeline = json_column(row, "pipeline", "{}");
-    known_fields(row, &pipeline, &["budget", "limit", "stages"]);
+    known_fields(row, &pipeline, &["budget", "hold", "limit", "stages"]);
     let mut writer = WriteOut::new(recorder);
     writer = writer.with_budget(match field(row, &pipeline, "budget") {
         None => DEFAULT_BUDGET,
         Some(n) => n
             .as_u64()
             .unwrap_or_else(|| malformed(row, format!("budget {n}"))) as usize,
+    });
+    writer = writer.with_hold(match field(row, &pipeline, "hold") {
+        None => DEFAULT_HOLD,
+        Some(n) => n
+            .as_u64()
+            .unwrap_or_else(|| malformed(row, format!("hold {n}"))) as usize,
     });
     if let Some(n) = field(row, &pipeline, "limit") {
         let limits = Limits {
@@ -138,6 +144,7 @@ fn run(row: &Row) -> Result<Value, tabnas_support::Failure> {
                 Some("start") => top.item(row, true),
                 Some("end") => top.item(row, false),
                 Some("flush") => top.out().flush(),
+                Some("record") => top.out().record_end(),
                 _ => malformed(row, format!("{op} is not an operation")),
             },
             other => malformed(row, format!("{other} is not an operation")),

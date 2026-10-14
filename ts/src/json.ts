@@ -158,6 +158,9 @@ export class JsonRenderer<O extends TextOut = TextOut> implements Sink {
     const top = this.stack[depth - 1]
     if (undefined === top) {
       if (this.rootDone) throw this.protocol('a second root value')
+      // The root begins the text, on a record's boundary: a writer holds
+      // the root's text from its first byte, a scalar root whole.
+      this.out.recordEnd?.()
       return
     }
     if (top.object) {
@@ -170,11 +173,14 @@ export class JsonRenderer<O extends TextOut = TextOut> implements Sink {
     this.breakLine(depth)
   }
 
-  // Bookkeeping after a whole value.
+  // Bookkeeping after a whole value; a value directly inside the root
+  // container is a record, and its end is marked, as is the root's own
+  // end, which closes the document.
   private endValue(): void {
     const top = this.stack[this.stack.length - 1]
     if (undefined === top) this.rootDone = true
     else if (top.object) top.expectingKey = true
+    if (this.stack.length <= 1) this.out.recordEnd?.()
   }
 
   private key(k: string): void {
@@ -198,6 +204,9 @@ export class JsonRenderer<O extends TextOut = TextOut> implements Sink {
   private start(open: string, frame: Frame): void {
     this.beginValue()
     this.put(open)
+    // The root container's opening is not a record of its own: it belongs
+    // to the first value inside it, so a failure before that value is
+    // whole leaves nothing behind.
     this.stack.push(frame)
   }
 

@@ -5,10 +5,12 @@
 mod common;
 
 use serde_json::Value as Json;
-use tabnas_render::{CsvOptions, CsvRenderer, MissingText, Newline, Quoting, StringOut};
+use tabnas_render::{CsvOptions, CsvRenderer, MissingText, Newline, Quoting};
 use tabnas_support::{Row, Runner, Value};
 
-use common::{expected_text, failure, feed_table, field, json_column, known_fields, malformed};
+use common::{
+    expected_text, failure, feed_table, field, json_column, known_fields, malformed, Marked,
+};
 
 fn options(row: &Row) -> CsvOptions {
     let json = json_column(row, "options", "{}");
@@ -22,6 +24,7 @@ fn options(row: &Row) -> CsvOptions {
             "null_text",
             "missing",
             "quoting",
+            "marks",
         ],
     );
     let mut options = CsvOptions::default();
@@ -66,10 +69,10 @@ fn options(row: &Row) -> CsvOptions {
 fn csv() {
     Runner::new_with_row(|_input, row| {
         let events = common::table_events(row, &json_column(row, "events", ""));
-        let mut renderer =
-            CsvRenderer::new(StringOut::new(), options(row)).map_err(|f| failure(&f))?;
+        let out = Marked::new(row, &json_column(row, "options", "{}"));
+        let mut renderer = CsvRenderer::new(out, options(row)).map_err(|f| failure(&f))?;
         feed_table(&mut renderer, &events).map_err(|f| failure(&f))?;
-        Ok(Value::String(renderer.into_inner().into_string()))
+        Ok(Value::String(renderer.into_inner().text))
     })
     .input("events")
     .expected("expected")

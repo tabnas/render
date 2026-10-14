@@ -4,13 +4,16 @@ pipeline	ops	expected
 # received.
 #
 #   pipeline  JSON object, read RAW; empty is {}. budget: the coalescing
-#             budget in bytes (default 32768); limit: max_output_bytes
-#             (absent for none); stages: outermost first, each
-#             {"join":"<sep>"}, {"concat":true} or {"replace":["<from>","<to>"]}.
+#             budget in bytes (default 32768); hold: the longest record
+#             held back, in bytes (default 16777216); limit:
+#             max_output_bytes (absent for none); stages: outermost first,
+#             each {"join":"<sep>"}, {"concat":true} or
+#             {"replace":["<from>","<to>"]}.
 #   ops       JSON array, read RAW: a string is a fragment written to the
 #             outermost stage; {"op":"start"} and {"op":"end"} are item
 #             markers (the outermost stage must be a join or concat);
-#             {"op":"flush"} flushes.
+#             {"op":"record"} marks the end of a record; {"op":"flush"}
+#             flushes.
 #   expected  JSON array of the chunks the writer received, one per write
 #             call, in order, after the last operation. Nothing is flushed
 #             for the row: what is still buffered is not in the result. Or
@@ -31,6 +34,24 @@ pipeline	ops	expected
 {"budget":4}	["abc","de"]	["abc"]
 {"budget":4}	["a",{"op":"flush"},"b",{"op":"flush"}]	["a","b"]
 {"budget":3}	["é","é",{"op":"flush"}]	["é","é"]
+# Record ends: from the first {"op":"record"}, the buffer is drained only
+# at a record end, once it holds at least the budget, so what a failure
+# leaves unsent is the open record. A fragment of any size is held with
+# its record, up to the hold; a record that outgrows the hold is written
+# as it comes: the buffer first, the whole records before it included,
+# then the fragment that outgrew it, which the buffer never takes. A
+# flush drains everything.
+{"budget":4}	["ab",{"op":"record"},"cdefg"]	[]
+{"budget":4}	["ab",{"op":"record"},"cd",{"op":"record"},"ef"]	["abcd"]
+{"budget":4}	["ab",{"op":"record"},"cd",{"op":"record"},"ef",{"op":"flush"}]	["abcd","ef"]
+{"budget":4}	[{"op":"record"},"abcdefgh"]	[]
+{"budget":4}	[{"op":"record"},"abcdefgh",{"op":"record"}]	["abcdefgh"]
+{"budget":0}	["a","b",{"op":"record"},"c"]	["a","b"]
+{"budget":0}	[{"op":"record"},"a","b",{"op":"record"},"c"]	["ab"]
+{"budget":0}	[{"op":"record"},{"op":"record"},"a",{"op":"record"},{"op":"record"}]	["a"]
+{"budget":8,"hold":3}	[{"op":"record"},"ab",{"op":"record"},"cdef","g"]	["ab","cdef"]
+{"budget":8,"hold":3}	[{"op":"record"},"ab",{"op":"record"},"cd","ef","g",{"op":"record"},{"op":"flush"}]	["abcd","ef","g"]
+{"budget":0,"hold":0}	[{"op":"record"},"a","b"]	["a","b"]
 # The output limit counts UTF-8 bytes, buffered as well as written, and
 # fails before the fragment that would exceed it.
 {"limit":5,"budget":0}	["abc","de"]	["abc","de"]
@@ -58,10 +79,12 @@ pipeline	ops	expected
 {"stages":[{"join":","}]}	[{"op":"start"},{"op":"start"}]	ERROR:PROTOCOL_ORDER_ERROR
 {"stages":[{"join":","}]}	[{"op":"end"}]	ERROR:PROTOCOL_ORDER_ERROR
 {"stages":[{"join":","}]}	[{"op":"start"},{"op":"end"},{"op":"end"}]	ERROR:PROTOCOL_ORDER_ERROR
+{"stages":[{"join":","}],"budget":0}	["a",{"op":"record"},"b",{"op":"record"},"c"]	["a",",b"]
 # Concat: a join with no separator; the markers behave as join's.
 {"stages":[{"concat":true}]}	[{"op":"start"},"a",{"op":"end"},{"op":"start"},"b",{"op":"end"},"c",{"op":"flush"}]	["abc"]
 {"stages":[{"concat":true}]}	[{"op":"start"},{"op":"start"}]	ERROR:PROTOCOL_ORDER_ERROR
 {"stages":[{"concat":true}]}	[{"op":"end"}]	ERROR:PROTOCOL_ORDER_ERROR
+{"stages":[{"concat":true}],"budget":0}	[{"op":"record"},"a",{"op":"record"},"b"]	["a"]
 # ReplaceText: str::replace's left-to-right, non-overlapping matches however
 # the text is chunked; the bounded carry is written at a flush, which is a
 # boundary no match spans; an empty literal is the identity.
@@ -76,6 +99,19 @@ pipeline	ops	expected
 {"stages":[{"replace":["",""]}]}	["abc",{"op":"flush"}]	["abc"]
 {"stages":[{"replace":["日本","JP"]}]}	["日","本語",{"op":"flush"}]	["JP語"]
 {"stages":[{"replace":["\r\n","\n"]}]}	["a\r","\nb\r",{"op":"flush"}]	["a\nb\r"]
+# Record ends wait in the carry, each where it fell, and are passed on
+# where they fall once the carried bytes are written: before a match that
+# begins there, after one that ends there; one inside a match is dropped.
+# The text is the same as without them.
+{"stages":[{"replace":["ab","X"]}],"budget":0}	[{"op":"record"},"xa",{"op":"record"},"c"]	["xa"]
+{"stages":[{"replace":["ab","X"]}],"budget":0}	[{"op":"record"},"xa",{"op":"record"},"c",{"op":"flush"}]	["xa","c"]
+{"stages":[{"replace":["ab","X"]}],"budget":0}	[{"op":"record"},"a",{"op":"record"},"ab",{"op":"flush"}]	["a","X"]
+{"stages":[{"replace":["ab","X"]}],"budget":0}	[{"op":"record"},"xa",{"op":"record"},"b",{"op":"flush"}]	["xX"]
+{"stages":[{"replace":["abc","-"]}],"budget":0}	[{"op":"record"},"ab",{"op":"record"},"x",{"op":"flush"}]	["ab","x"]
+{"stages":[{"replace":["abc","-"]}],"budget":0}	[{"op":"record"},"a",{"op":"record"},"b",{"op":"record"},"x",{"op":"flush"}]	["a","b","x"]
+{"stages":[{"replace":["abc","-"]}],"budget":0}	[{"op":"record"},"a",{"op":"record"},"b",{"op":"record"},"c",{"op":"record"},{"op":"flush"}]	["-"]
+{"stages":[{"replace":["ab","X"]}],"budget":0}	[{"op":"record"},"ab",{"op":"record"},"c",{"op":"flush"}]	["X","c"]
+{"stages":[{"replace":["ab","X"]}],"budget":0}	[{"op":"record"},"a",{"op":"record"},{"op":"flush"}]	["a"]
 # Stacks: stages compose, outermost first; the limit sees the bytes that reach the writer.
 {"stages":[{"join":","},{"replace":[",",";"]}]}	["a","b",{"op":"flush"}]	["a;b"]
 {"stages":[{"join":"--"},{"replace":["--","+"]}]}	["a","b","c",{"op":"flush"}]	["a+b+c"]

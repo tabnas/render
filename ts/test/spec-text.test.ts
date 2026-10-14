@@ -8,7 +8,7 @@
 
 import { Limits } from '@tabnas/alchemy/shared'
 
-import { Concat, DEFAULT_BUDGET, Join, ReplaceText, TextOut, WriteOut, Writer } from '../dist/render'
+import { Concat, DEFAULT_BUDGET, DEFAULT_HOLD, Join, ReplaceText, TextOut, WriteOut, Writer } from '../dist/render'
 
 import { Row, fields, jsonColumn, malformed, runFixture } from './common'
 
@@ -38,10 +38,10 @@ function count(row: Row, json: unknown, what: string): number {
 // Build the stack: the writer, then the stages from the innermost (the
 // last listed) outwards.
 function build(row: Row, recorder: Recorder): TextOut {
-  const pipeline = fields(row, jsonColumn(row, 'pipeline', '{}'), ['budget', 'limit', 'stages'])
-  const writer = new WriteOut(recorder).withBudget(
-    undefined === pipeline.budget ? DEFAULT_BUDGET : count(row, pipeline.budget, 'budget'),
-  )
+  const pipeline = fields(row, jsonColumn(row, 'pipeline', '{}'), ['budget', 'hold', 'limit', 'stages'])
+  const writer = new WriteOut(recorder)
+    .withBudget(undefined === pipeline.budget ? DEFAULT_BUDGET : count(row, pipeline.budget, 'budget'))
+    .withHold(undefined === pipeline.hold ? DEFAULT_HOLD : count(row, pipeline.hold, 'hold'))
   if (undefined !== pipeline.limit) {
     writer.withLimits(Limits.with({ max_output_bytes: count(row, pipeline.limit, 'limit') }))
   }
@@ -83,6 +83,7 @@ function run(row: Row): string[] {
     if ('start' === op.op) item(row, top, true)
     else if ('end' === op.op) item(row, top, false)
     else if ('flush' === op.op) top.flush()
+    else if ('record' === op.op) top.recordEnd?.()
     else malformed(row, `${JSON.stringify(op)} is not an operation`)
   }
   // Nothing flushed for the row: what is still buffered never reached the

@@ -365,3 +365,19 @@ func TestCSVEndFlushesTheOutputAndNothingElseDoes(t *testing.T) {
 	eq(t, r.Inner().Committed(), 10, "committed after end")
 	eq(t, b.String(), "\"a\"\r\n\"x\"\r\n", "written")
 }
+
+func TestCSVARunThatFailsPartWayLeavesWholeRows(t *testing.T) {
+	// The output limit falls inside the second row: the writer holds a row
+	// until its end, so what reached it is the header and the first row,
+	// and nothing of the second.
+	var b bytes.Buffer
+	limit := uint64(25)
+	limits := tt.DefaultLimits()
+	limits.MaxOutputBytes = &limit
+	r, _ := NewCSVRenderer(NewWriteOut(&b).WithBudget(0).WithLimits(limits), DefaultCSVOptions())
+	ok(t, tableEv(t, r, schemaEv("a", "b")))
+	ok(t, tableEv(t, r, rowEv(s("x"), s("y"))))
+	f := code(t, tableEv(t, r, rowEv(s("long-value"), s("z"))), tt.CodeResourceLimitExceeded)
+	eq(t, f.CommittedOutput, true, "committed")
+	eq(t, b.String(), "\"a\",\"b\"\r\n\"x\",\"y\"\r\n", "written")
+}

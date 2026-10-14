@@ -261,3 +261,33 @@ export function runFixture(
     ...(parseExpected ? { parseExpected: (cell: string) => parseExpected(cell) } : {}),
   }).spec(spec)
 }
+
+// The output a renderer's fixture row writes to: the text, kept, with the
+// row's `marks` written where the renderer marks the end of a record.
+// `marks` is the fixture's own field, not a renderer option: a row that
+// gives it pins where the marks fall, and one that does not reads the text
+// alone.
+export class Marked {
+  text = ''
+  private readonly marks: string | null
+
+  constructor(row: Row, options: unknown) {
+    const marks = isObject(options) ? options.marks : undefined
+    if (undefined !== marks && 'string' !== typeof marks) malformed(row, `marks ${JSON.stringify(marks)}`)
+    this.marks = undefined === marks ? null : (marks as string)
+  }
+
+  writeStr(s: string): void {
+    this.text += s
+  }
+
+  flush(): void {}
+
+  hasCommitted(): boolean {
+    return 0 < this.text.length
+  }
+
+  recordEnd(): void {
+    if (null !== this.marks) this.text += this.marks
+  }
+}
