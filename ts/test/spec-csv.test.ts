@@ -4,9 +4,9 @@
 // CSV text out, or the code of the first failure. The encodings are
 // docs/reference.md's "Shared fixtures"; the harness is ./common.ts.
 
-import { CsvOptions, CsvRenderer, MissingText, StringOut } from '../dist/render'
+import { CsvOptions, CsvRenderer, MissingText } from '../dist/render'
 
-import { Row, expectedText, feedTable, fields, jsonColumn, malformed, runFixture, tableEvents } from './common'
+import { Marked, Row, expectedText, feedTable, fields, jsonColumn, malformed, runFixture, tableEvents } from './common'
 
 function options(row: Row): Partial<CsvOptions> {
   const json = fields(row, jsonColumn(row, 'options', '{}'), [
@@ -16,6 +16,7 @@ function options(row: Row): Partial<CsvOptions> {
     'null_text',
     'missing',
     'quoting',
+    'marks',
   ])
   const out: Partial<CsvOptions> = {}
   if (undefined !== json.delimiter) {
@@ -52,9 +53,9 @@ runFixture(
   'events',
   (row) => {
     const events = tableEvents(row, jsonColumn(row, 'events', ''))
-    const renderer = new CsvRenderer(new StringOut(), options(row))
+    const renderer = new CsvRenderer(new Marked(row, jsonColumn(row, 'options', '{}')), options(row))
     feedTable(renderer, events)
-    return renderer.intoInner().intoString()
+    return renderer.intoInner().text
   },
   { expected: expectedText },
 )

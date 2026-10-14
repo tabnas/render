@@ -302,10 +302,18 @@ describe('JSON: the output', () => {
     assert.equal(err.committedOutput, false, 'the bracket is only buffered')
     assert.equal(r.intoInner().committed(), 0)
 
+    // With no budget the writer still holds the bracket, which belongs to
+    // the first value; once that value is whole, both reach it.
     const r2 = new JsonRenderer(new WriteOut(new BytesWriter()).withBudget(0))
     r2.event(AS)
     const err2 = fails('PROTOCOL_ORDER_ERROR', () => r2.event(key('k')))
-    assert.equal(err2.committedOutput, true, 'the bracket reached the writer')
+    assert.equal(err2.committedOutput, false, 'the bracket is held with its value')
+    const r3 = new JsonRenderer(new WriteOut(new BytesWriter()).withBudget(0))
+    r3.event(AS)
+    r3.event(Ev.bool(true))
+    const err3 = fails('PROTOCOL_ORDER_ERROR', () => r3.event(key('k')))
+    assert.equal(err3.committedOutput, true, 'the first value reached the writer')
+    assert.equal(r3.intoInner().committed(), 5)
   })
 
   it('the end flushes the output and nothing else does', () => {
@@ -317,5 +325,14 @@ describe('JSON: the output', () => {
     assert.equal(r.isDone(), true)
     assert.equal(r.intoInner().committed(), 6)
     assert.equal(r.intoInner().intoInner().text(), '[true]')
+  })
+  it('a run that stops part way leaves whole values', () => {
+    // The source failed inside the second object: the writer holds a value
+    // directly inside the root until it ends, so what reached it is the
+    // first object, whole, and nothing of the second.
+    const out = new WriteOut(new BytesWriter()).withBudget(0)
+    const r = new JsonRenderer(out)
+    for (const ev of [AS, OS, key('id'), num('1'), OE, OS, key('id'), num('2')]) r.event(ev)
+    assert.equal(out.intoInner().text(), '[{"id":1}')
   })
 })

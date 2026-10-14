@@ -50,6 +50,7 @@ export {
   BytesWriter,
   Concat,
   DEFAULT_BUDGET,
+  DEFAULT_HOLD,
   FdWriter,
   Join,
   ReplaceText,

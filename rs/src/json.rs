@@ -173,7 +173,10 @@ impl<O: TextOut> JsonRenderer<O> {
         let depth = self.stack.len();
         match self.stack.last_mut() {
             None if self.root_done => Err(self.protocol("a second root value")),
-            None => Ok(()),
+            // The root begins the text, on a record's boundary: a writer
+            // holds the root's text from its first byte, a scalar root
+            // whole.
+            None => self.out.record_end(),
             Some(Frame::Object {
                 expecting_key: true,
                 ..
@@ -190,13 +193,19 @@ impl<O: TextOut> JsonRenderer<O> {
         }
     }
 
-    /// Bookkeeping after a whole value.
-    fn end_value(&mut self) {
+    /// Bookkeeping after a whole value; a value directly inside the root
+    /// container is a record, and its end is marked, as is the root's
+    /// own end, which closes the document.
+    fn end_value(&mut self) -> Result<(), Fail> {
         match self.stack.last_mut() {
             None => self.root_done = true,
             Some(Frame::Object { expecting_key, .. }) => *expecting_key = true,
             Some(Frame::Array { .. }) => {}
         }
+        if self.stack.len() <= 1 {
+            self.out.record_end()?;
+        }
+        Ok(())
     }
 
     fn key(&mut self, k: &str) -> Result<(), Fail> {
@@ -233,6 +242,9 @@ impl<O: TextOut> JsonRenderer<O> {
     fn start(&mut self, open: &str, frame: Frame) -> Result<(), Fail> {
         self.begin_value()?;
         self.put(open)?;
+        // The root container's opening is not a record of its own: it
+        // belongs to the first value inside it, so a failure before that
+        // value is whole leaves nothing behind.
         self.stack.push(frame);
         Ok(())
     }
@@ -255,8 +267,7 @@ impl<O: TextOut> JsonRenderer<O> {
             self.break_line(self.stack.len())?;
         }
         self.put("}")?;
-        self.end_value();
-        Ok(())
+        self.end_value()
     }
 
     fn close_array(&mut self) -> Result<(), Fail> {
@@ -275,8 +286,7 @@ impl<O: TextOut> JsonRenderer<O> {
             self.break_line(self.stack.len())?;
         }
         self.put("]")?;
-        self.end_value();
-        Ok(())
+        self.end_value()
     }
 
     fn scalar(&mut self, ev: JsonEvent<'_>) -> Result<(), Fail> {
@@ -296,8 +306,7 @@ impl<O: TextOut> JsonRenderer<O> {
             // `scalar` is called for the four scalar events only.
             _ => return Err(self.protocol("not a scalar")),
         }
-        self.end_value();
-        Ok(())
+        self.end_value()
     }
 
     fn end(&mut self) -> Result<(), Fail> {
@@ -749,13 +758,24 @@ mod tests {
         assert!(!err.committed_output, "the bracket is only buffered");
         assert_eq!(r.out.committed(), 0);
 
+        // With no budget the writer still holds the bracket, which belongs
+        // to the first value; once that value is whole, both reach it.
         let mut r = JsonRenderer::new(
             WriteOut::new(Vec::new()).with_budget(0),
             JsonOptions::default(),
         );
         r.event(ArrayStart).unwrap();
         let err = r.event(Key("k")).unwrap_err();
-        assert!(err.committed_output, "the bracket reached the writer");
+        assert!(!err.committed_output, "the bracket is held with its value");
+        let mut r = JsonRenderer::new(
+            WriteOut::new(Vec::new()).with_budget(0),
+            JsonOptions::default(),
+        );
+        r.event(ArrayStart).unwrap();
+        r.event(Bool(true)).unwrap();
+        let err = r.event(Key("k")).unwrap_err();
+        assert!(err.committed_output, "the first value reached the writer");
+        assert_eq!(r.out.committed(), 5);
     }
 
     #[test]
@@ -770,5 +790,29 @@ mod tests {
         assert!(r.is_done());
         assert_eq!(r.out.committed(), 6);
         assert_eq!(r.into_inner().into_inner(), b"[true]");
+    }
+
+    #[test]
+    fn a_run_that_stops_part_way_leaves_whole_values() {
+        // The source failed inside the second object: the writer holds a
+        // value directly inside the root until it ends, so what reached it
+        // is the first object, whole, and nothing of the second.
+        let mut out = WriteOut::new(Vec::new()).with_budget(0);
+        {
+            let mut r = JsonRenderer::new(&mut out, JsonOptions::default());
+            for ev in [
+                ArrayStart,
+                ObjectStart,
+                Key("id"),
+                num("1"),
+                ObjectEnd,
+                ObjectStart,
+                Key("id"),
+                num("2"),
+            ] {
+                r.event(ev).unwrap();
+            }
+        }
+        assert_eq!(out.into_inner(), b"[{\"id\":1}".to_vec());
     }
 }

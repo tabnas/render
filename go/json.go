@@ -161,7 +161,9 @@ func (r *JSONRenderer[O]) beginValue() *shared.Fail {
 		if r.rootDone {
 			return r.protocol("a second root value")
 		}
-		return nil
+		// The root begins the text, on a record's boundary: a writer holds
+		// the root's text from its first byte, a scalar root whole.
+		return shared.RecordEnd(r.out)
 	}
 	top := &r.stack[depth-1]
 	if top.object {
@@ -180,16 +182,22 @@ func (r *JSONRenderer[O]) beginValue() *shared.Fail {
 	return r.breakLine(depth)
 }
 
-// endValue is the bookkeeping after a whole value.
-func (r *JSONRenderer[O]) endValue() {
+// endValue is the bookkeeping after a whole value; a value directly
+// inside the root container is a record, and its end is marked, as is
+// the root's own end, which closes the document.
+func (r *JSONRenderer[O]) endValue() *shared.Fail {
 	n := len(r.stack)
 	if n == 0 {
 		r.rootDone = true
-		return
+		return shared.RecordEnd(r.out)
 	}
 	if r.stack[n-1].object {
 		r.stack[n-1].expectingKey = true
 	}
+	if n == 1 {
+		return shared.RecordEnd(r.out)
+	}
+	return nil
 }
 
 func (r *JSONRenderer[O]) key(k string) *shared.Fail {
@@ -240,6 +248,9 @@ func (r *JSONRenderer[O]) start(open string, fr frame) *shared.Fail {
 	if f := r.put(open); f != nil {
 		return f
 	}
+	// The root container's opening is not a record of its own: it belongs
+	// to the first value inside it, so a failure before that value is
+	// whole leaves nothing behind.
 	r.stack = append(r.stack, fr)
 	return nil
 }
@@ -268,8 +279,7 @@ func (r *JSONRenderer[O]) closeObject() *shared.Fail {
 	if f := r.put("}"); f != nil {
 		return f
 	}
-	r.endValue()
-	return nil
+	return r.endValue()
 }
 
 func (r *JSONRenderer[O]) closeArray() *shared.Fail {
@@ -293,8 +303,7 @@ func (r *JSONRenderer[O]) closeArray() *shared.Fail {
 	if f := r.put("]"); f != nil {
 		return f
 	}
-	r.endValue()
-	return nil
+	return r.endValue()
 }
 
 func (r *JSONRenderer[O]) scalar(ev shared.Event) *shared.Fail {
@@ -327,8 +336,7 @@ func (r *JSONRenderer[O]) scalar(ev shared.Event) *shared.Fail {
 	if f != nil {
 		return f
 	}
-	r.endValue()
-	return nil
+	return r.endValue()
 }
 
 func (r *JSONRenderer[O]) end() *shared.Fail {

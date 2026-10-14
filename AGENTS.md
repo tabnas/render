@@ -45,7 +45,9 @@ Read the design in transduce's
 [`docs/architecture.md`](https://github.com/tabnas/transduce/blob/main/docs/architecture.md),
 section 3, which this crate implements. In one paragraph: a **text
 output** ([`text.rs`](rs/src/text.rs)) takes string fragments, coalesces
-them to a byte budget and writes them; `Join` puts a separator between
+them to a byte budget and writes them, and from the first record end a
+text marks it holds each record until its end, so a failure leaves whole
+records; `Join` puts a separator between
 logical items (never between transport chunks); `ReplaceText` replaces a
 fixed literal, carrying the bounded suffix that a match across chunk
 boundaries needs. The **CSV renderer** ([`csv.rs`](rs/src/csv.rs)) is the
@@ -70,7 +72,7 @@ standard transducer to be the only one.
 
 | Path | What it is |
 |---|---|
-| `rs/src/text.rs` | `WriteOut` (coalescing, the output limit, `output_bytes`), `StringOut`, `Join`, `Concat`, `ReplaceText`; `TextOut` (with `has_committed`) is alchemy's shared type, re-exported |
+| `rs/src/text.rs` | `WriteOut` (coalescing, the output limit, `output_bytes`, holding a record until its end), `StringOut`, `Join`, `Concat`, `ReplaceText`; `TextOut` (with `has_committed` and `record_end`) is alchemy's shared type, re-exported |
 | `rs/src/csv.rs` | `CsvRenderer` (a `TableSink`); `CsvOptions` and its dialect types are alchemy's shared types, re-exported |
 | `rs/src/json.rs` | `JsonRenderer` (a `Sink`); `JsonOptions` is alchemy's shared type, re-exported |
 | `rs/src/renderers.rs` | `RenderRenderers` (`renderers()`): the renderers and text stages as alchemy's `Renderers` |

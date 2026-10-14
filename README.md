@@ -26,6 +26,10 @@ TableRows/1 ──▶ RecordsToJson ──▶ JsonEvents/1
   default) before they reach the writer, `max_output_bytes` fails before
   the fragment that would exceed it, and `output_bytes` is counted into
   the shared metrics.
+- **Whole records on failure**: the renderers mark where each record
+  ends (a CSV row, a value inside a JSON document's root), and the writer
+  holds a record until its end, so a run that fails part way leaves whole
+  records behind and none half written.
 
 Rust only for now. The language that composes transducers and renderers
 is [tabnas-alchemy](https://github.com/tabnas/alchemy);

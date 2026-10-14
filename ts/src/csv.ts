@@ -130,6 +130,9 @@ export class CsvRenderer<O extends TextOut = TextOut> implements TableSink {
     }
     this.labels = columns.map((c) => c.label)
     this.phase = 'rows'
+    // The text begins on a record's boundary: a writer holds what follows,
+    // the header first, from its first byte.
+    this.out.recordEnd?.()
     if (this.opts.header) {
       this.emitted = true
       this.labels.forEach((label, i) => {
@@ -137,6 +140,8 @@ export class CsvRenderer<O extends TextOut = TextOut> implements TableSink {
         this.field(label)
       })
       this.out.writeStr(this.newline)
+      // The header is whole, and the rows are records.
+      this.out.recordEnd?.()
     }
   }
 
@@ -186,6 +191,7 @@ export class CsvRenderer<O extends TextOut = TextOut> implements TableSink {
     this.emitted = true
     this.out.writeStr(this.newline)
     this.count++
+    this.out.recordEnd?.()
   }
 
   // Reject a row before any of it is written, so a row is rendered whole or

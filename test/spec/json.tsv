@@ -24,6 +24,17 @@ events	options	expected
 ["[",{"num":"1"},"]","end"]	{"indent":2,"trailing_newline":true}	[\n  1\n]\n
 [null,"end"]	{"trailing_newline":true}	null\n
 [null,"end"]	{"trailing_newline":false}	null
+# Record ends: the renderer marks one where its text begins, before the
+# root value, then after each value directly inside the root array or
+# object, and where the root value ends; none inside the values. The
+# root's opening belongs to the first value inside it. marks is the
+# fixture's own field, not a renderer option: its text is written where
+# each falls.
+["[",{"num":"1"},"[",null,"]","{",{"key":"a"},{"str":"x"},"}","]","end"]	{"marks":"|"}	|[1|,[null]|,{"a":"x"}|]|
+["{",{"key":"a"},{"num":"1"},{"key":"b"},"[","]","}","end"]	{"marks":"|","indent":2}	|{\n  "a": 1|,\n  "b": []|\n}|
+["[","]","end"]	{"marks":"|"}	|[]|
+[{"str":"x"},"end"]	{"marks":"|"}	|"x"|
+[null,"end"]	{"marks":"|","trailing_newline":true}	|null|\n
 # A trailing newline is written at the end event only.
 [null]	{"trailing_newline":true}	null
 # A root scalar is a document.

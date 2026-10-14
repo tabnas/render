@@ -8,7 +8,7 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert'
 
-import { Cell, Fail, PublicColumn, TableEvent } from '@tabnas/alchemy/shared'
+import { Cell, Fail, Limits, PublicColumn, TableEvent } from '@tabnas/alchemy/shared'
 
 import { BytesWriter, CsvOptions, CsvRenderer, MissingText, StringOut, WriteOut } from '../dist/render'
 
@@ -329,5 +329,17 @@ describe('CSV: the protocol', () => {
     assert.equal(r.rows(), 1)
     assert.equal(r.intoInner().committed(), 10)
     assert.equal(r.intoInner().intoInner().text(), '"a"\r\n"x"\r\n')
+  })
+  it('a run that fails part way leaves whole rows', () => {
+    // The output limit falls inside the second row: the writer holds a row
+    // until its end, so what reached it is the header and the first row,
+    // and nothing of the second.
+    const out = new WriteOut(new BytesWriter()).withBudget(0).withLimits(Limits.with({ max_output_bytes: 25 }))
+    const r = new CsvRenderer(out)
+    r.tableEvent(schema(['a', 'b']))
+    r.tableEvent(row([s('x'), s('y')]))
+    const err = fails('RESOURCE_LIMIT_EXCEEDED', () => r.tableEvent(row([s('long-value'), s('z')])))
+    assert.equal(err.committedOutput, true)
+    assert.equal(out.intoInner().text(), '"a","b"\r\n"x","y"\r\n')
   })
 })

@@ -4,12 +4,12 @@
 // exact JSON text out, or the code of the first failure. The encodings are
 // docs/reference.md's "Shared fixtures"; the harness is ./common.ts.
 
-import { JsonOptions, JsonRenderer, StringOut } from '../dist/render'
+import { JsonOptions, JsonRenderer } from '../dist/render'
 
-import { Row, expectedText, feedJson, fields, jsonColumn, jsonEvents, malformed, runFixture } from './common'
+import { Marked, Row, expectedText, feedJson, fields, jsonColumn, jsonEvents, malformed, runFixture } from './common'
 
 function options(row: Row): Partial<JsonOptions> {
-  const json = fields(row, jsonColumn(row, 'options', '{}'), ['indent', 'trailing_newline'])
+  const json = fields(row, jsonColumn(row, 'options', '{}'), ['indent', 'trailing_newline', 'marks'])
   const out: Partial<JsonOptions> = {}
   if (undefined !== json.indent && null !== json.indent) {
     if (!Number.isInteger(json.indent) || (json.indent as number) < 0) {
@@ -31,9 +31,9 @@ runFixture(
   'events',
   (row) => {
     const events = jsonEvents(row, jsonColumn(row, 'events', ''))
-    const renderer = new JsonRenderer(new StringOut(), options(row))
+    const renderer = new JsonRenderer(new Marked(row, jsonColumn(row, 'options', '{}')), options(row))
     feedJson(renderer, events)
-    return renderer.intoInner().intoString()
+    return renderer.intoInner().text
   },
   { expected: expectedText },
 )
