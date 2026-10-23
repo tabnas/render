@@ -425,29 +425,35 @@ code; [`DIVERGENCE.md`](../DIVERGENCE.md) lists the Rust ones.
 
 ## Measured
 
-`cargo bench` (`rs/benches/render.rs`), release build, one core of the
-development container (a shared 2.1 GHz Xeon vCPU), 2026-09-27, criterion's
-mean. The end-to-end groups run the spec's worked-example document of
-20 000 records (1.66 MB of JSON); the renderer-only groups run 20 000
-synthetic rows of five columns.
+`cargo bench` (`rs/benches/render.rs`), release build, one core of a
+shared two-vCPU VM (Arm Neoverse-N1), 2026-10-23, criterion's mean. The
+end-to-end groups run the spec's worked-example document of 20 000
+records (1.66 MB of JSON); the renderer-only groups run 20 000 synthetic
+rows of five columns.
 
 | Group | What runs | Throughput |
 |---|---|---|
-| `json_to_csv/text_to_csv_incremental` | **end to end**: JSON text → `ParserSource` (incremental, pruned) → `TableFromJson` → `CsvRenderer` → `WriteOut` | 1.37 s; about 1.15 MiB/s of JSON in, 0.57 MiB/s of CSV out |
-| `json_to_csv/parsed_value_to_csv` | the same chain from the parsed value: `ValueSource` → `TableFromJson` → `CsvRenderer` → `WriteOut` | 76 ms; about 21 MiB/s of source |
-| `json_render` | renderer only, no parse: parsed value → `ValueSource` → `JsonRenderer` → `WriteOut` | 39 ms; about 40 MiB/s of source |
-| `csv_render_rows` | renderer only: pre-built cells → `CsvRenderer` → discarding `WriteOut` | about 4.5 M rows/s |
-| `csv_render_bytes` | the same, in output bytes | about 318 MiB/s of CSV |
+| `json_to_csv/text_to_csv_through_the_part` | **end to end**: JSON text → `ParserEventSource` (pruned) → JSON's transducer part, natively (`TransduceTree`) → `TableFromJson` → `CsvRenderer` → `WriteOut` | 1.86 s; about 0.85 MiB/s of JSON in, 0.42 MiB/s of CSV out |
+| `json_to_csv/parsed_value_to_csv` | the same chain from the parsed value: `ValueSource` → `TableFromJson` → `CsvRenderer` → `WriteOut` | 64 ms; about 25 MiB/s of source |
+| `json_render` | renderer only, no parse: parsed value → `ValueSource` → `JsonRenderer` → `WriteOut` | 34 ms; about 46 MiB/s of source |
+| `csv_render_rows` | renderer only: pre-built cells → `CsvRenderer` → discarding `WriteOut` | about 3.5 M rows/s |
+| `csv_render_bytes` | the same, in output bytes | about 245 MiB/s of CSV |
 
-What the table says: JSON to CSV end to end runs at the engine's speed,
-about 1.2 MiB/s here as in transduce's `table_from_text` group, and the
-stages this crate adds cost about 5% of that (76 ms of 1.37 s, the table
-transducer included). The renderers alone are two orders of magnitude
-faster than the parse and are not where an export's time goes.
+What the table says: JSON to CSV end to end runs at the speed of the
+parse through JSON's part, about 0.85 MiB/s here as in transduce's
+`table_from_text` group, and the stages this crate adds cost about 3% of
+that (64 ms of 1.86 s, the table transducer included). The renderers
+alone are two orders of magnitude faster than the parse and are not
+where an export's time goes.
 
 The numbers move with the container: the same original code measured
 78 MiB/s on `json_render` earlier on 2026-09-27 and 34 MiB/s later the
-same day, so a comparison is only sound between runs made together.
+same day, so a comparison is only sound between runs made together. The
+first table, on 2026-09-27, was a 2.1 GHz Xeon vCPU's, and its end-to-end
+group read through transduce's incremental source: 1.37 s, against 76 ms
+from the parsed value. That source is retired (step 13 of alchemy's
+streaming plan), and transduce's `docs/BENCH.md` measures what JSON's
+part costs beside it.
 Re-measure before quoting; the renderer-only numbers answer what the
 renderer costs, and only `json_to_csv` answers the brief's throughput
 target.
