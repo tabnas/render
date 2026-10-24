@@ -433,18 +433,23 @@ rows of five columns.
 
 | Group | What runs | Throughput |
 |---|---|---|
-| `json_to_csv/text_to_csv_through_the_part` | **end to end**: JSON text → `ParserEventSource` (pruned) → JSON's transducer part, natively (`TransduceTree`) → `TableFromJson` → `CsvRenderer` → `WriteOut` | 1.86 s; about 0.85 MiB/s of JSON in, 0.42 MiB/s of CSV out |
+| `json_to_csv/text_to_csv_through_the_part` (retired 2026-10-24) | **end to end**: JSON text → `ParserEventSource` (pruned) → JSON's transducer part, natively (`TransduceTree`) → `TableFromJson` → `CsvRenderer` → `WriteOut` | 1.86 s; about 0.85 MiB/s of JSON in, 0.42 MiB/s of CSV out |
+| `json_to_csv/text_to_csv_through_the_parse` | **end to end**: JSON text → `ParserSource` (the parse, its value walked) → `TableFromJson` → `CsvRenderer` → `WriteOut` | not yet measured on this machine |
 | `json_to_csv/parsed_value_to_csv` | the same chain from the parsed value: `ValueSource` → `TableFromJson` → `CsvRenderer` → `WriteOut` | 64 ms; about 25 MiB/s of source |
 | `json_render` | renderer only, no parse: parsed value → `ValueSource` → `JsonRenderer` → `WriteOut` | 34 ms; about 46 MiB/s of source |
 | `csv_render_rows` | renderer only: pre-built cells → `CsvRenderer` → discarding `WriteOut` | about 3.5 M rows/s |
 | `csv_render_bytes` | the same, in output bytes | about 245 MiB/s of CSV |
 
 What the table says: JSON to CSV end to end runs at the speed of the
-parse through JSON's part, about 0.85 MiB/s here as in transduce's
-`table_from_text` group, and the stages this crate adds cost about 3% of
-that (64 ms of 1.86 s, the table transducer included). The renderers
-alone are two orders of magnitude faster than the parse and are not
-where an export's time goes.
+parse, about 0.85 MiB/s here through JSON's part as in transduce's
+`table_from_text` group of the day, and the stages this crate adds cost
+about 3% of that (64 ms of 1.86 s, the table transducer included). The
+renderers alone are two orders of magnitude faster than the parse and are
+not where an export's time goes. The native `TransduceTree` the first
+end-to-end group read through went with the ruling of 2026-10-24 (admin
+ADR-31: a part has one implementation, its alchemy text); the group now
+reads through the parse and its walk, and a part's cost is measured where
+the text runs, in aless (transduce's `docs/BENCH.md`, "Through aless").
 
 The numbers move with the container: the same original code measured
 78 MiB/s on `json_render` earlier on 2026-09-27 and 34 MiB/s later the
