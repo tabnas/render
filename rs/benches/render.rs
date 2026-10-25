@@ -9,20 +9,21 @@
 //! discarding writer), and how fast does an already parsed document flow
 //! through the whole-value walker into the JSON renderer (`json_render`).
 //! END TO END: how fast does JSON text become CSV through the chain the
-//! design brief assigns to this crate, parser to rule passes, through
-//! JSON's transducer part, to `TableFromJson` to `CsvRenderer` to
-//! `WriteOut` (`json_to_csv`), as aless reads a JSON file, which
-//! is the number the brief's sixth target asks for; the same chain from the
-//! parsed value separates the parse from the stages after it.
+//! design brief assigns to this crate, the parse and its value walked
+//! (`ParserSource`) into `TableFromJson`, `CsvRenderer` and `WriteOut`
+//! (`json_to_csv`), which is the number the brief's sixth target asks for;
+//! the same chain from the parsed value separates the parse from the
+//! stages after it. A host that streams JSON reads it through its
+//! transducer part, alchemy's text over the parser's rule passes; that
+//! chain's cost is measured where the text runs, in aless and alchemy-cli.
 
 use std::io;
 
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 use tabnas_render::{CsvOptions, CsvRenderer, JsonOptions, JsonRenderer, TextOut, WriteOut};
 use tabnas_transduce::{
-    column_from_meta, Cell, Duplicates, Fail, Flow, Limits, Metrics, ParserEventSource,
-    PublicColumn, Schema, Selector, Source, TableBinding, TableEvent, TableFromJson, TableSink,
-    TransduceTree, TreeContainer, TreeKey, TreeRule, TreeScalar, TreeSpec, ValueSource,
+    column_from_meta, Cell, Duplicates, Fail, Flow, Limits, Metrics, ParserSource, PublicColumn,
+    Schema, Selector, Source, TableBinding, TableEvent, TableFromJson, TableSink, ValueSource,
 };
 
 /// 20k records in a release measurement; under `cargo test` (a debug build
@@ -193,37 +194,16 @@ fn csv_chain() -> Chain {
     .expect("the worked-example binding is valid")
 }
 
-/// JSON's transducer part, as tabnas-json spells it: the document's events
-/// of the parser's rule passes, made by the native `transduce-tree`.
-fn json_part() -> TreeSpec {
-    let rule = |container, key, scalar| TreeRule {
-        container,
-        key,
-        scalar,
-        ..TreeRule::default()
-    };
-    TreeSpec::new()
-        .with("map", rule(Some(TreeContainer::Object), None, None))
-        .with("list", rule(Some(TreeContainer::Array), None, None))
-        .with("pair", rule(None, Some(TreeKey::Token(0)), None))
-        .with("val", rule(None, None, Some(TreeScalar::Token(0))))
-}
-
-/// The CSV chain over JSON's part, the engine's arrays emptied behind the
-/// stream, as aless reads a JSON file: the chain comes back.
-fn through_the_part(src: &str, chain: Chain) -> (Result<Flow, Fail>, Chain) {
-    let (outcome, tree) = ParserEventSource::new(tabnas_json::make(), src)
-        .grammar("json")
-        .prune()
-        .run_owned(TransduceTree::new(json_part(), chain));
-    (outcome, tree.into_inner())
+/// The CSV chain over the parse, its value walked: the chain comes back.
+fn through_the_parse(src: &str, chain: Chain) -> (Result<Flow, Fail>, Chain) {
+    ParserSource::new(tabnas_json::make(), src).run_owned(chain)
 }
 
 fn json_to_csv(c: &mut Criterion) {
     let src = records_json(ROWS);
     // Once outside the measurement: the chain ends, every record is a row,
     // and the output size is known.
-    let (outcome, table) = through_the_part(&src, csv_chain());
+    let (outcome, table) = through_the_parse(&src, csv_chain());
     outcome.expect("the chain runs");
     let csv = table.into_inner();
     let rows = csv.rows();
@@ -236,9 +216,9 @@ fn json_to_csv(c: &mut Criterion) {
     let mut group = c.benchmark_group("json_to_csv");
     group.sample_size(10);
     group.throughput(Throughput::Bytes(src.len() as u64));
-    group.bench_function("text_to_csv_through_the_part", |b| {
+    group.bench_function("text_to_csv_through_the_parse", |b| {
         b.iter(|| {
-            let (outcome, table) = through_the_part(&src, csv_chain());
+            let (outcome, table) = through_the_parse(&src, csv_chain());
             outcome.expect("the chain runs");
             table.into_inner().into_inner().committed()
         })
