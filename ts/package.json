@@ -1,6 +1,6 @@
 {
   "name": "@tabnas/render",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "main": "dist/render.js",
   "type": "commonjs",
   "types": "dist/render.d.ts",
