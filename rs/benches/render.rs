@@ -15,7 +15,7 @@
 //! the same chain from the parsed value separates the parse from the
 //! stages after it. A host that streams JSON reads it through its
 //! transducer part, alchemy's text over the parser's rule passes; that
-//! chain's cost is measured where the text runs, in aless and alchemy-cli.
+//! chain's cost is measured where the text runs, in dmog.
 
 use std::io;
 
