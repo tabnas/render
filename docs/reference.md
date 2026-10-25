@@ -449,7 +449,8 @@ not where an export's time goes. The native `TransduceTree` the first
 end-to-end group read through went with the ruling of 2026-10-24 (admin
 ADR-31: a part has one implementation, its alchemy text); the group now
 reads through the parse and its walk, and a part's cost is measured where
-the text runs, in aless (transduce's `docs/BENCH.md`, "Through aless").
+the text runs, in dmog (transduce's `docs/BENCH.md`, "Through aless",
+measured when aless ran the text).
 
 The numbers move with the container: the same original code measured
 78 MiB/s on `json_render` earlier on 2026-09-27 and 34 MiB/s later the

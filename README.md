@@ -32,9 +32,9 @@ TableRows/1 ──▶ RecordsToJson ──▶ JsonEvents/1
   records behind and none half written.
 
 Rust only for now. The language that composes transducers and renderers
-is [tabnas-alchemy](https://github.com/tabnas/alchemy);
-[aless](https://github.com/rjrodger/aless) exposes both from the command
-line.
+is [tabnas-alchemy](https://github.com/tabnas/alchemy); the `dmog`
+command ([tabnas/dmog](https://github.com/tabnas/dmog)) exposes both from
+the command line.
 
 ## Use
 
