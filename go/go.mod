@@ -11,17 +11,17 @@ require github.com/tabnas/alchemy/go v0.4.0
 // package from v0.2.0).
 require (
 	github.com/tabnas/parser/go v0.12.16
-	github.com/tabnas/transduce/go v0.6.0
+	github.com/tabnas/transduce/go v0.6.1
 )
 
 // The grammars the read-back oracles parse with, and the shared fixture
 // runner.
 require (
-	github.com/tabnas/csv/go v0.6.9
+	github.com/tabnas/csv/go v0.6.10
 	github.com/tabnas/json/go v0.5.20
 	github.com/tabnas/jsonl/go v0.1.20
 	github.com/tabnas/support/go v0.3.9
-	github.com/tabnas/yaml/go v0.5.28
+	github.com/tabnas/yaml/go v0.5.31
 )
 
-require github.com/tabnas/jsonic/go v0.7.10 // indirect
+require github.com/tabnas/jsonic/go v0.7.11 // indirect
